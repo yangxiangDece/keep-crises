@@ -2092,6 +2092,10 @@
 - 包尾增加特殊字符分割：行分隔符类：LineBasedFrameDecoder或自定义分隔符类 ：DelimiterBasedFrameDecoder
 - 将消息分为消息头和消息体：LengthFieldBasedFrameDecoder类。分为有头部的拆包与粘包、长度字段在前且有头部的拆包与粘包、多扩展头部的拆包与粘包
 
+# SpringBoot
+
+## 源码
+
 # Spring
 
 ## 容器级别扩展接口
@@ -4869,3 +4873,4 @@
 - Swift
 - Rust
 
+  
