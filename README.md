@@ -1,3 +1,125 @@
+# 面试突击第一季
+
+- 为什么使用消息队列？
+
+  - 解耦
+  - 异步
+  - 消峰
+    - 大量的请求一瞬间涌入系统，高峰值达到每秒5000个请求，直接会打死服务
+    - 每秒5000个请求写入MQ里面，系统A从MQ中慢慢拉取请求，每秒钟就拉去2000个请求，不要超过自己每秒能处理的最大请求。在高峰值时，会在MQ中堆积几十万甚至几百万的请求，但是只要高峰期一过，消息就会被慢慢消费掉
+
+- RabbitMQ如何保证生产者消息不丢失？
+
+  - 使用事务，但是事务会降低吞吐量
+  - 使用confirm模式，写成功会返回一个ack，失败会返回nack，具体根据业务来处理
+  - 事务机制和confirm机制的区别
+    - 事务机制是同步的，你提交一个事务之后会阻塞在那里，但是confirm机制是异步的，你发送消息后就可以继续执行流程，如果消息发送成功后，broker会异步回调接口通知这个消息已经收到了
+
+- RabbitMQ如何保证broker消息不丢失？
+
+  - 持久化，发送消息将消息的deliveryMode设置为2，将消息持久化到磁盘
+  - 持久化可以和生产者的confirm机制配合起来，只有消息持久化到磁盘之后，才会通知生产者ack；这样即使rabbitmq挂了，没有持久化成功，生产者也收不到ack，生产者可以继续重发
+
+- RabbitMQ如何保证消费者消息不丢失？
+
+  - 关闭自动ack，手动ack
+
+- kafka丢失消息场景
+
+  - kafka某个broker宕机了，重新选举partition的leader时，此时其他的follower刚好还有些数据没有同步，结果此时leader挂了，然后选举某个follower成leader之后，就丢失数据了
+
+- kafka如何保证不丢失消息？
+
+  - 给topic设置replication.factor参数，这个值必须大于1，要求每个partition必须有至少2个副本
+  - 在kafka服务端设置min.insync.replicas参数，这个值必须大于1，要求leader至少感知有至少一个follower还跟自己保持联系，没掉队，这样才能确保leader挂了还有一个follower
+  - producer端设置acks=all 必须是写入所有replica之后，才能认为写成功了
+  - producer端设置retries=max 一旦写入是不，无限重试，卡在这里了
+
+- 如何保证消息的顺序性？
+
+  - rabbitmq，拆分多个queue，每个queue一个consumer，queue里面的消息是按顺序来的；一个queue对应一个consumer，然后这个consumer内部用内存对了排队，然后分发给底层不同的worker来处理
+  - kafka：
+    - 一个topic，一个partition，一个consumer，内部单线程消费，写N个内存queue，然后N个线程分别消费一个内存queue
+    - 一个partition中的数据是有顺序的，生产者在写的时候，可以指定一个key，比如说你指定某个订单id作为key，这个订单的相关数据，一定会被分发到一个partition中去，而且这个partition中的数据一定是有顺序的
+
+-  如何解决消息队列的延时以及过期失效问题？
+
+  - rabbitmq可以设置过期时间，就是TTL，如果消息再queue中积压超过一定时间就会被rabbitmq给清理掉，但是不建议设置过期时间
+  - 如果消息丢弃了，只能写程序将丢失的数据一点点查出来，然后重新灌入mq里面，补数据
+
+- 消息队列满了以后该怎么处理？
+
+  - 写临时程序，接入数据来消费，消费一个丢弃一个，快速消费掉所有消息，然后再补已经丢失的数据
+
+- 有几百万消息持续堆积几个小时，如何处理？
+
+  - 先修复consumer的问题，确保其消费速度，然后将现有的consumer都停掉
+  - 临时建立好原先10倍或者20倍的queue数量
+  - 然后写一个临时的分发数据的consumer程序，这个程序部署上去消费积压的数据，消费之后不做耗时处理，直接均匀轮询写入临时建立好的10倍数量的queue
+  - 接着临时征用10倍的机器来部署consumer，每一批consumer消费一个临时queue的数据
+  - 这种做法相当于是临时将queue资源和consumer资源扩大10倍，以政策的10倍速度消费数据
+  - 等快速消费积压数据之后，得恢复原形部署架构，重新用原来的consumer及其来消费信息
+
+- 如果让你来设计一个消息队列？
+
+  - 首先mq支持可伸缩性，需要的时候可以快速扩容，可以增加吞吐量，分布式系统，参照kafka的设计理念，broker->topic->partition，每个partition放一个机器，就存一部分数据，扩容时给topic增加partition，然后做数据迁移，增加机器
+  - mq的数据落盘问题，落盘才能保证数据完整性，顺序写
+  - mq的高可用，多副本->leader & follower -> broker挂了重新选举leader
+
+- redis线程模型
+
+  - 文件事件处理器
+    - redis基于reactor模式开发了网络事件处理器，文件事件处理器，file event handler，这个处理器是单线程的，采用IO多路复用机制同时监听多个socket，根据socket上的事件来选中对应的事件处理器来处理事件
+    - 如果被监听的socket准备好了执行accept、read、write、close等操作的时候，跟操作对应的文件事件就会产生，这个时候事件处理器就会调用之前关联好的事件处理器来处理这个事件
+    - 文件事件处理器是单线程，但是通过IO多路复用机制监听了多个socket,可以实现高性能的网络通信模型
+    - 文件事件处理器的结构包含四个部分：多个socket，IO多路复用程序，文件事件分派器，事件处理器(命令请求处理器、命令回复处理器、连接应答处理器)
+    - 多个socket可能并发的产生不同的操作，每个操作对应不同的事件，但是IO多路复用会监听多个socket，会将socket放入一个队列中排队，每次从队列中取出一个socket给事件分派器，事件分派器把socket给对应的事件处理器
+    - 事件分派器会根据每个socket当前产生的事件(accept、read、write、close)，来选择对应的事件处理器
+
+- 为什么redis单线程还这么快？
+
+  - 纯内存操作
+  - 核心是基于非阻塞的IO多路复用机制
+  - 单线程反而避免了多线程的频繁切换问题
+
+- redis过期策略
+
+  - 定期删除+惰性删除
+  - 定期删除是redis默认每隔100ms随机抽取一些过期时间的key，检查过期并删除
+  - 如果定期删除遗漏了很多过期key，并且也没有惰性删除，内存会有大量过期的key，导致redis内存耗尽
+    - 内存淘汰机制
+
+- 手写一个LRU算法
+
+  ```java
+  public class LRUCache<K,V> extends LinkedHashMap<K,V> {
+    	private final int CACHE_SIZE;
+    	// cacheSize表示最多可以换成多少条数据
+    	public LRUCache(int cacheSize) {
+        // 设置一个LinkedHashMap的初始大小，true表示让LinkedHashMap按照访问顺序进行排序，
+        // 最近访问的放在前面，最早访问的放在后面
+        super((int) Math.ceil(cacheSize / 0.75) + 1, 0.75f, true);
+        CACHE_SIZE = cacheSizel;
+      }
+    
+    	@Override
+    	protected boolean removeEldestEntry(Map.Entry eldest) {
+        // 当map中的数据量大于指定的缓存个数的时候，就自动删除最早的数据
+        return size() > CACHE_SIZE;
+      }
+  }
+  ```
+
+  
+
+- 缓存与数据库双写不一致
+
+- 
+
+# 面试突击第二季
+
+# 面试突击第三季
+
 # 面试真题
 
 - CountDownLatch和CyclicBarrier的区别？
