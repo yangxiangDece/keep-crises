@@ -1,483 +1,3 @@
-
-
-# 一
-
-- RocketMQ如何保证生产者消息不丢失？
-
-  - 使用事务，但是事务会降低吞吐量
-  - 使用confirm模式，写成功会返回一个ack，失败会返回nack，具体根据业务来处理
-  - 事务机制和confirm机制的区别
-    - 事务机制是同步的，你提交一个事务之后会阻塞在那里，但是confirm机制是异步的，你发送消息后就可以继续执行流程，如果消息发送成功后，broker会异步回调接口通知这个消息已经收到了
-
-- RocketMQ如何保证broker消息不丢失？
-
-  - 持久化，发送消息将消息的deliveryMode设置为2，将消息持久化到磁盘
-  - 持久化可以和生产者的confirm机制配合起来，只有消息持久化到磁盘之后，才会通知生产者ack；这样即使rabbitmq挂了，没有持久化成功，生产者也收不到ack，生产者可以继续重发
-
-- RocketMQ如何保证消费者消息不丢失？
-
-  - 关闭自动ack，手动ack
-
-- Kafka丢失消息场景
-
-  - Kafka某个broker宕机了，重新选举partition的leader时，此时其他的follower刚好还有些数据没有同步，结果此时leader挂了，然后选举某个follower成leader之后，就丢失数据了
-
-- Kafka如何保证不丢失消息？
-
-  - 给topic设置replication.factor参数，这个值必须大于1，要求每个partition必须有至少2个副本
-  - 在Kafka服务端设置min.insync.replicas参数，这个值必须大于1，要求leader至少感知有至少一个follower还跟自己保持联系，没掉队，这样才能确保leader挂了还有一个follower
-  - producer端设置acks=all 必须是写入所有replica之后，才能认为写成功了
-  - producer端设置retries=max 一旦写入是不，无限重试，卡在这里了
-
-- 如何保证消息的顺序性？
-
-  - rabbitmq
-    - 拆分多个queue，每个queue一个consumer，queue里面的消息是按顺序来的；一个queue对应一个consumer，然后这个consumer内部用内存对了排队，然后分发给底层不同的worker来处理
-  - Kafka
-    - 一个topic，一个partition，一个consumer，内部单线程消费，写N个内存queue，然后N个线程分别消费一个内存queue
-    - 一个partition中的数据是有顺序的，生产者在写的时候，可以指定一个key，比如说你指定某个订单id作为key，这个订单的相关数据，一定会被分发到一个partition中去，而且这个partition中的数据一定是有顺序的
-
--  如何解决消息队列的延时以及过期失效问题？
-
-  - rabbitmq可以设置过期时间，就是TTL，如果消息再queue中积压超过一定时间就会被rabbitmq给清理掉，但是不建议设置过期时间
-  - 如果消息丢弃了，只能写程序将丢失的数据一点点查出来，然后重新灌入mq里面，补数据
-
-- 消息队列满了以后该怎么处理？
-
-  - 写临时程序，接入数据来消费，消费一个丢弃一个，快速消费掉所有消息，然后再补已经丢失的数据
-
-- 有几百万消息持续堆积几个小时，如何处理？
-
-  - 先修复consumer的问题，确保其消费速度，然后将现有的consumer都停掉
-  - 临时建立好原先10倍或者20倍的queue数量
-  - 然后写一个临时的分发数据的consumer程序，这个程序部署上去消费积压的数据，消费之后不做耗时处理，直接均匀轮询写入临时建立好的10倍数量的queue
-  - 接着临时征用10倍的机器来部署consumer，每一批consumer消费一个临时queue的数据
-  - 这种做法相当于是临时将queue资源和consumer资源扩大10倍，以政策的10倍速度消费数据
-  - 等快速消费积压数据之后，得恢复原形部署架构，重新用原来的consumer及其来消费信息
-
-- 如果让你来设计一个消息队列？
-
-  - 首先mq支持可伸缩性，需要的时候可以快速扩容，可以增加吞吐量，分布式系统，参照Kafka的设计理念，broker->topic->partition，每个partition放一个机器，就存一部分数据，扩容时给topic增加partition，然后做数据迁移，增加机器
-  - mq的数据落盘问题，落盘才能保证数据完整性，顺序写
-  - mq的高可用，多副本->leader & follower -> broker挂了重新选举leader
-
-- redis线程模型
-
-  - 文件事件处理器
-    - redis基于reactor模式开发了网络事件处理器，文件事件处理器，file event handler，这个处理器是单线程的，采用IO多路复用机制同时监听多个socket，根据socket上的事件来选中对应的事件处理器来处理事件
-    - 如果被监听的socket准备好了执行accept、read、write、close等操作的时候，跟操作对应的文件事件就会产生，这个时候事件处理器就会调用之前关联好的事件处理器来处理这个事件
-    - 文件事件处理器是单线程，但是通过IO多路复用机制监听了多个socket,可以实现高性能的网络通信模型
-    - 文件事件处理器的结构包含四个部分：多个socket，IO多路复用程序，文件事件分派器，事件处理器(命令请求处理器、命令回复处理器、连接应答处理器)
-    - 多个socket可能并发的产生不同的操作，每个操作对应不同的事件，但是IO多路复用会监听多个socket，会将socket放入一个队列中排队，每次从队列中取出一个socket给事件分派器，事件分派器把socket给对应的事件处理器
-    - 事件分派器会根据每个socket当前产生的事件(accept、read、write、close)，来选择对应的事件处理器
-
-- 为什么redis单线程还这么快？
-
-  - 纯内存操作
-  - 核心是基于非阻塞的IO多路复用机制
-  - 单线程反而避免了多线程的频繁切换问题
-
-- redis过期策略
-
-  - 定期删除+惰性删除
-  - 定期删除是redis默认每隔100ms随机抽取一些过期时间的key，检查过期并删除
-  - 如果定期删除遗漏了很多过期key，并且也没有惰性删除，内存会有大量过期的key，导致redis内存耗尽
-    - 内存淘汰机制
-
-- 手写一个LRU算法
-
-  ```java
-  public class LRUCache<K,V> extends LinkedHashMap<K,V> {
-    	private final int CACHE_SIZE;
-    	// cacheSize表示最多可以换成多少条数据
-    	public LRUCache(int cacheSize) {
-        // 设置一个LinkedHashMap的初始大小，true表示让LinkedHashMap按照访问顺序进行排序，
-        // 最近访问的放在前面，最早访问的放在后面
-        super((int) Math.ceil(cacheSize / 0.75) + 1, 0.75f, true);
-        CACHE_SIZE = cacheSizel;
-      }
-    
-    	@Override
-    	protected boolean removeEldestEntry(Map.Entry eldest) {
-        	// 当map中的数据量大于指定的缓存个数的时候，就自动删除
-        	return size() > CACHE_SIZE;
-      }
-  ```
-
-- redis replication的核心机制
-
-  - redis采用异步方式复制数据到slave节点，redis2.8以后开始，slave node会周期地确认自己每次复制的数据量
-  - 一个master node是可以配置多个slave node的
-  - slave node也可以连接其他slave node
-  - slave node做复制的时候，是不会block master node的正常操作
-  - slave node做复制的时候，也不会block对自己的查询操作，他会用旧的数据集来提供服务，但是复制完成的时候，需要删除旧数据集，加载新数据集，这时候就会暂停对外的服务了
-  - slave node 主要用来进行横向扩容，做读写分离，扩容的slave node可以提高吞吐量
-  - 采用主从复制，必须开启master node的持久化
-
-- redis完整主从复制流程
-
-- redis主从架构原理
-
-  - 当启动一个slave node的时候，会发送一个PSYNC命令给master node，如果这是slave node重新连接master，那么master node仅仅只会复制slave部分缺少的数据；如果是slave node第一次连接maste node，那么就会触发一次full resynchronization
-  - 开始full resynchronization的时候，master会启动一个后台线程，开始生成一份RDB快照文件，同时还会将从客户端收到的所有命令缓存在内存中，RDB文件生成完毕之后，master会将这个RDB发送给slave，slave会先写入本地磁盘，然后再从本地磁盘加载到内存中，然后master会将内存中缓存的写命令发送给slave，slave也会同步这些数据
-  - slave node如果跟master node有网络故障，断开了连接，会自动重连，master如果发现有多个slave node都来重新连接，仅仅会启动一个rdb save操作，用一份数据服务所有slave node
-
-- redis主从复制断点续传
-
-  - 从redis2.8 开始，就支持主从复制的断点续传，如果主从复制过程中，网络连接断开了，重新连接后会接着上次复制的地方，继续复制下去，而不是从头开始复制一份
-  - master node会在内存中创建一个backlog，master和slave都会保存一个replica offset，还有一个master id，offset 就是保存在backlog中，如果master和slave网络断开重新连接后，slave会让master从上次的replica offset开始继续复制
-  - 如果没有找到对应的offset，那么就会进行full resynchronization
-  - master会在自身不断累加offset，slave也会不断在自身累加offset，slave每秒会上报自己的offset给master，同时master也会记录每个slave的offset
-
-- redis无磁盘复制
-
-  - master在内存中直接创建rdb，然后发送给slave，不会在自己本地落地磁盘了
-  - repl-diskless-sync
-  - repl-diskless-sync-delay  等待多久可以开始复制，默认5秒，需要等待slave重新连接过来
-
-- redis过期key
-
-  - slave不会过期key，只会等待master过期key，如果master过期了一个key，或者通过LRU算法淘汰了一个key，那么会模拟一条del命令发送给slave
-
-- redis高可用（故障转移failover，主备切换）
-
-- redis哨兵模式
-
-  - 集群监控，负责监控redis master和slave进程是否正常工作
-  - 消息通知，如果某个redis实例有故障，那么哨兵模式负责发送消息作为报警通知管理员
-  - 故障转移，如果master node挂掉了，会自动转移到slave node上
-  - 配置中心，如果故障转移发送了，通知client客户端新的master地址
-  - 哨兵至少需要3个实例，来保证自己的健壮性
-  - 哨兵+redis主从的部署架构，是不会保证数据零丢失的，只能保证redis集群的高可用
-
-- 为什么redis哨兵模式2个节点无法正常工作？
-
-  - 哨兵2个节点，如果挂掉了1个，只剩下1个哨兵，是没有办法故障转移的
-
-- redis主从复制数据丢失情况
-
-  - 主备切换过程中，可能造成数据丢失；
-    - 因为master - slave 的复制是异步的，所以有可能有部分数据还没复制到slave，master就宕机了，此时这部分数据丢失了
-  - 脑裂数据丢失
-    - 某个master的网络出现异常突然断开了和其他slave的连接，但是实际上master并没有挂掉，此时哨兵可能就会认为master宕机了，然后开启选举，将其他slave切换成了master，此时集群里面就出现了两个master，这种情况叫做脑裂
-    - 此时虽然某个slave被切换成了master，但是可能client端还没来得及切换到新的master，还继续向旧的master写数据，当旧的master再次恢复时，会被作为一个slave挂到新的master，自己的数据被清空，重新从新的master复制数据
-  - 解决方案
-    - min-slave-to-write 1  减少异步复制的数据丢失
-      - 要求至少有1个slave，数据复制和同步的延迟不超过10秒
-      - 一旦slave复制数据和ack延时太长，就认为可能master宕机后损失的数据太多了，那么就拒绝写请求，这样可以把master宕机时由于部分数据未同步到slave导致的数据丢失降低在可控范围内
-    - min-slave-max-lag 10  减少脑裂的数据丢失
-      - 如果一个master出现了脑裂，跟其他的slave丢了连接，上面两个配置可以保证，如果不能继续给指定数量的slave发送数据，而且slave超过10秒没有给自己ack消息，那么就直接拒绝客户端的写请求，这样脑裂后的旧master就不会接收client的新数据，也就避免了数据丢失；
-      - 脑裂情况下，最多丢失10秒的数据
-    - 当master不接受新的写请求了，client怎么办？
-      - client会做降级，写到本地磁盘，client对外接收的请求再做降级，做限流，减慢请求涌入的速度
-      - client将请求写入Kafka消息队列，每隔10分钟去队列里取一次，尝试重新发回master
-
-- redis主观宕机和客观宕机
-
-  - 主观宕机：如果一个哨兵觉得一个master挂掉了，这叫主观宕机
-    - 如果一个哨兵ping一个master，超过了is-master-down-after-millisecods指定的毫秒数之后
-  - 客观宕机：如果quorum数量的哨兵都觉得这个master挂掉了，这叫客观宕机
-
-- redis哨兵和slave集群的自动发现机制
-
-  - 哨兵相互之间的发现，是通过redis的pub/sub系统实现的，通过消费消息相互感知彼此的存在；
-  - 每个哨兵都会往_sentinel_:hello 这个channel发送一条消息，内容是自己的host、ip和runid还有对这个master的监控配置，其他哨兵消费这个消息就可以感知到这个哨兵的存在
-  - 每个哨兵还会跟其他哨兵交换master的监控配置，互相进行监控配置的同步
-
-- redis slave 的选举
-
-  - 选举slave会考虑slave的信息
-    - 跟master断开连接的时长
-    - slave优先级
-    - 复制offset
-    - run id
-  - 如果一个slave跟master断开连接已经超过了down-after-millisecods的10倍，外加master宕机的时长，那么slave就被认为不适合选举master  (down-after-milliseconds * 10) + millisecods_since_master_is_in_SDOWN_state
-  - 对slave进行排序
-    - 按照slave的优先级进行排序，slave priority 越低，优先级越高
-    - 如果slave priority相同，那么看replica offset，哪个slave复制了越多的数据，offset越靠后，优先级越高
-    - 如果上面两个条件相同，那么选择一个run id比较小的那个slave，id越小表示越早启动，数据越完整
-
-- redis quorum和majority
-
-  - 每次一个哨兵要做主备切换，首先需要quorum数量的哨兵认为主观宕机，然后选举出一个哨兵来做切换，这个哨兵还得得到majority哨兵的授权，才能正式执行切换
-  - 如果quorum < majority，比如5个哨兵，majority是3，quorum设置为2，那么就3个哨兵授权可以切换
-  - 如果quorum >= majority，那么必须quorum数量的哨兵都授权，比如5个哨兵，quorum是5，那么必须5个哨兵都同意授权，才能正式执行
-
-- redis configuration epoch
-
-  - 执行切换的那个哨兵，会从要切换到的新master那里得到一个configuration epoch，这就是一个version号，每次切换的version号都必须是唯一的，如果第一个选举出的哨兵切换失败了，那么其他哨兵，会等待failover-timeout时间，然后接着继续执行切换，此时会重新获取一个新的configuration epoch，作为新的version号
-
-- redis configuration传播
-
-  - 哨兵完成切换后，会在自己本地更新生成最新的master配置，然后同步给其他的哨兵，就是通过之前说的pub/sub消息机制
-  - 一个哨兵完成一次新的切换后，新的master配置是跟着新的version号的，其他的哨兵都是根据版本号的大小更新自己的master配置
-
-- redis持久化
-
-  - AOF和RDB同时使用
-  - 用AOF来保证数据不丢失，作为数据恢复的第一选择
-  - 用RDB来做不同程度的冷备，在AOF文件都丢失或损坏不可用的时候，还可以使用RDB来进行快速的数据恢复
-
-- redis cluster 和 replication sentinel
-
-  - replication sentinel，一个master，多个slave，要几个slave跟你要求的吞吐量有关系，搭建sentinel集群，保证redis主从架构高可用
-  - redis cluster，主要针对的是海量数据+高并发+高可用场景
-
-- redis cluster 基本原理
-
-  - cluster 自动将数据分片，每个master上放一部分数据；提供内置的高可用机制，部分master不可用时，还是可以继续工作
-  - 在redis cluster集群架构下，每个redis要开放两个端口，比如一个是6379，另外一个就是加10000的端口号，即16379，这个端口是给集群之间通信使用的，即cluster bus，集群总线，用来故障检测，配置更新，故障转移授权，cluster bus用了另一种二进制协议，主要用于节点间进行高效的数据交换，占用更少的网络带宽和处理时间
-  - 一致性hash算法（自动缓存迁移）+ 虚拟节点（自动负载均衡）
-  - redis cluster的hash slot算法
-    - redis cluster 有固定的16384个hash slot，对每个key计算CRC16值，然后对16384取模，可以获取key对应的hash slot
-    - redis cluster 中每个master持有部分slot，比如有3个master，那么可能每个master持有5000多个hash slot
-    - hash slot 让node的增加和移除很简单，增加一个master，就将其他的master的hash slot移动部分过去，减少一个master，就将它的hash slot移动到其他的master上去，移动的hash solt 的成本是非常低的
-    - 客户端的api， 可以对指定的数据，让他们走同一个hash slot，通过hash tag 来实现
-
-- 为什么删除缓存，而不是更新缓存？
-
-  - 因为缓存有时候并不是只查询数据库就可以实现的，可能需要查询另外两个表的数据，然后进行计算才能计算出缓存的最新值，如果是更新缓存，代价是非常大的，如果频繁地修改一个缓存，那么缓存也会被频繁的更新，但是这个缓存不并一定会访问到，所以还是删除以后，等真正访问的时候再去同步更新缓存数据
-
-- 缓存与数据库双写不一致的情况，如何处理？
-
-  - 更新数据的时候，根据数据的唯一标识，将操作路由到一个jvm内存队列里面，读取数据的时候，如果发现数据不再缓存中，那么将重新读取数据+更新缓存的操作，根据唯一标识，也发送到刚刚的jvm内存队列里面，一个队列对应一个线程
-  - 每个线程串行拿到对应的操作，一个一个地执行，这样，一个数据变更操作，先执行，删除缓存，然后再去更新数据库，但是还没有更新完成，此时如果来了一个读请求，读到了空的请求，那么可以先将缓存更新的请求发送到队列中，此时会在队列中积压，然后同步等待缓存更新完成，这里有一个优化点，一个队列中，其实多个更新缓存请求串在一起是没有意义的，因此可以过滤，如果发现队列中已经有一个更新缓存的请求了，那么就不用再放这个更新请求操作了，直接等待前面的更新操作更新完成即可
-  - 待那个队列对应的工作线程完成了上一个操作的数据库的修改之后，才会去执行下一个操作，也就是缓存更新的操作，此时会从数据库中读取最新的值，然后写入缓存中，如果请求还在等待时间范围内，不断轮询发现可以取到值了，那么直接返回，如果请求等待的时间超过一定时长，那么这一次直接从数据库中读取当前的旧值
-  - 读请求超时阻塞
-    - 由于读请求也加入了内存队列，所以每个读请求必须在超时时间范围内返回
-    - 最大风险点：可能数据更新很频繁，导致队列中积压了大量更新操作在里面，然后读请求发生大量的超时，最后导致大量的请求直接走数据库，务必通过一些真实模拟测试，看看业务数据频繁程度如何
-    - 如果一个内存队列可能积压的更新操作非常特别多，那么就要加机器，让每个机器上部署的服务实例来分摊请求，那么每个内存队列中积压的更新操作就会越少
-    - 根据实际项目经验：一般来说数据的写频率是很低的，因此实际上正常来说，在队列中积压的更新操作应该很少的，针对高并发，读缓存架构的项目，一般写请求相对读请求，是非常少的，每秒的qps能到几百就不错了
-    - 一秒，500个写操作，5份，没200ms，就100个写操作，单机器，20个内存队列，每个内存队列，可能就积压5个写操作，每个写操作性能测试，一般20ms左右就完成，那么针对每个内存队列中的数据的读请求，也就是最多hang一会儿，200ms以内肯定就能返回了
-    - 而且写操作还做了去重操作，所以也就是一个更新缓存的操作在后面，数据更新完成后，读请求触发更新操作也完成，然后临时等待的读请求全部可以读到缓存中的数据
-  - 读请求并发了过高
-    - 还有一个风险：就是突然间大量读请求会在几十毫秒的延时hang在服务器上，看服务能不能抗住，需要多少机器才能抗住最大的极限情况峰值
-    - 但是因为不是所有数据都是在同一时间更新， 缓存也不会在同一时间失效，所以每次可能也就是少量数据的缓存失效了，然后那些数据对应的请求过来，并发量应该也不是很大
-    - 按1:99的比列算计算读和写请求，每秒5万的qps，可能只有500次更新操作
-
-- redis并发竞争的问题？如何解决？了解redis事务的CAS方案吗？
-
-  - 就是多客户端同时并发写一个key，可能本来应该先到的数据后到了，导致数据版本错了，或者是多客户端同时获取一个key，修改值之后再写回去，只要顺序错了，数据就错了，redis自己就有天然解决这个问题的CAS类的乐观锁方案
-  - 确保同一时间只能有一个系统实例在操作某个key，别人不允许操作
-  - 每次要写时间，先判断一下当前这个key的时间戳是否比缓存里的value的时间戳更新，如果更新就可以写，否则不写
-  - 即分布式锁+时间戳
-  - 在并发量过大的情况下,可以通过消息中间件进行处理,把并行读写进行串行化，把Redis.set操作放在队列中使其串行化,必须的一个一个执行
-
-- 生产环境的redis部署结构？用了哪种集群？有没有做高可用保证？有没有开启持久化机制可以进行数据恢复？线上redis分配几个G的内存？设置了哪些参数？压测后你们redis集群承载多少QPS？
-
-  - redis cluster, 10台机器，5台机器部署了redis主实例，另外5台部署了从实例，每个主实例挂了一个从实例，5个节点对外提供读写服务，每个节点的读写高峰qps可以达到每秒5万，5台机器最多是25万读写请求/s
-  - 机器配置，32G+8核CPU+1T硬盘，但是分配给redis的是10g内存，一般生产环境，redis的内存尽量不要超过10G
-  - 高可用，任何一台主实例宕机，都会自动故障迁移
-
-- zookeeper分布式锁
-
-- 分库分表
-
-  - sharding-jdbc
-  - mycat
-
-- 系统如何不停机迁移到分库分表？
-
-  - 双写，写老库和新库
-  - 然后将老库的历史数据通过工具代码导入到新库
-  - 直到两边库数据一致
-
-- 分库分表动态扩容方案
-
-- 分库分表后全局id
-
-  - Twitter开源的snowflake 雪花算法，就是把一个64位的long类型的id，1个bit是不用的，用其中的41bit作为毫秒数，用10bit作为工作机器id，12bit作为序列号
-  - 1bit：不用，因为二级制里第一个bit如果为1，那么都是负数，但是我们生成的id都是整数，所以第一个bit统一都为0才行
-  - 41bit：表示的是时间戳，单位毫秒，41bit可以表示的数字多达2^41-1 ，也就是可以表示2^41-1个毫秒值，换算成年就是表示69年的时间
-  - 10bit：记录工作机器id，代表的是这个服务最多可以部署在2^10台机器上，也就是1024台机器，但是10bit里5bit代表机房id，5bit代表机器id，最多代表2^5个机房（32个机房），每个机房可以代表2^5台机器（32台机器）
-  - 12bit：这个是用来记录同一个毫秒内产生的不同id，12bit可以代表的最大正数是2^12-1=4096，也就是说用这个12bit代表的数字来区分同一毫秒内的4096个不同的id
-
-- mysql读写分离？
-
-  - 基于主从架构读写分离，只写主库，读取都去从库读取
-
-- mysql主从复制原理？
-
-  - 主库将变更写入binlog日志，然后从库连接到主库之后，从库有一个IO线程，将主库的binlog日志拷贝到自己本地，写入中继日志中，然后从库有一个SQL线程会从中级日志中读取binlog，然后执行binlog日志中的内容，也就是在自己本地在执行一遍SQL，这样就可以保证自己跟主库的数据一致
-  - 从库同步主库数据的过程是串行化的，即主库上并行的操作，在从库上会串行执行，所以在高并发场景下，从库的数据一定会比主库慢一些，是有延时的，随意经常出现，刚写入主库的数据可能读取不到，要过几十几百毫秒才能读取到
-  - 如果主库突然宕机了，然后恰好数据还没有同步到从库，那么有些数据可能在从库就没有，有些数据可能就丢失了
-
-- 如何解决mysql主从同步的延时问题？
-
-  - mysql提供了半同步机制解决主库数据丢失问题，并行复制解决主从同步延时问题
-  - 半同步机制
-    - 主库写入binlog日志后，就会强制此时立即将数据同步到从库，从库日志写入自己本地的reply log之后，接着会返回一个ack给主库，主库接收到至少一个从库的ack之后才认为写操作完成了
-  - 并行复制机制
-    - 从库开启多线程，并行读取replay log中不同库的日志，然后并行执行不同库的日志，这是库级别的并行
-  - show status，Seconds_Behind_Master，可以看到从库复制主库落后了几秒
-  - 主从复制要根据实际情况场景，建议一般是在读远远多于写，而且读的实时性要求不高；
-  - 如果要求实时性比较高，可以直接强制读取主库，可以通过数据库中间件来实现
-
-- 如何设计一个高可用系统？
-
-  - 限流
-  - 熔断
-    - 系统后端一些依赖，出了一些故障，比如mysql挂了，每次请求都是报错，熔断了，后续的请求就拒绝访问，10分钟后再看mysql恢复情况
-  - 降级
-  - 运维监控
-  - 资源隔离
-    - 让系统里面，某一块东西，在故障的情况下，不会耗尽系统所有资源，比如线程资源
-
-- hystrix的设计原则？
-
-  - 对依赖服务调用时出现的延迟和失败进行控制和容错保护
-  - 在复杂的分布式系统中，阻止某个依赖服务的故障在整个系统蔓延
-  - 提供fail-fast快速失败和快速恢复
-  - 提供fallback优雅降级的支持
-  - 支持近实时的监控、报警以及运维操作
-
-- hystrix是如何实现这些原则的？
-
-  - 通过HystrixCommand或者HystrixObservableCommand来封装对外部依赖的访问请求，这个访问请求一般会运行在独立的线程中
-  - 对于超出我们设定阈值的服务调用，直接进行超时处理，不允许其耗时过长时间阻塞系统
-  - 为每一个依赖服务维护一个线程池（船舱隔离技术），或者是semaphore，当线程池已满时，直接拒绝对这个服务的调用
-  - 对依赖服务的调用次数、失败次数、拒绝次数，超时次数，进行统计
-  - 如果对一个依赖服务的调用次数超过了一定的阈值，自动进行熔断，在一定时间内对服务的调用直接降级，一段时间后再自动尝试恢复
-  - 当一个服务调用出现失败，被拒绝，超时，短路等异常情况时，自动调用fallback降级机制
-  - 对属性和配置的修改提供近实时的支持
-
-- ZK分布式锁羊群效应
-
-  - 现象
-    - zk的客户端可以在znode上添加一个watch，用来监听znode相关事件并被通知
-    - 羊群效应就是 一个特定的znode 改变的时候ZooKeper 触发了所有watches 的事件
-    - 举个例子，如果有1000个客户端watch 一个znode的exists调用，当这个节点被创建的时候，将会有1000个通知被发送。这种由于一个被watch的znode变化，导致大量的通知需要被发送，将会导致在这个通知期间的其他操作提交的延迟。因此，只要可能，我们都强烈建议不要这么使用watch。仅仅有很少的客户端同时去watch一个znode比较好，理想的情况是只有1个
-  - 解决方案
-    - 每个锁竞争者，只需要关注”*locknode*”节点下序号比自己小的那个节点是否存在即可
-      1. 客户端调用create()方法创建名为“*locknode*/guid-lock-”的节点，需要注意的是，这里节点的创建类型需要设置为EPHEMERAL_SEQUENTIAL
-      2. 客户端调用getChildren(“*locknode*”)方法来获取所有已经创建的子节点，注意，这里不注册任何Watcher
-      3. 客户端获取到所有子节点path之后，如果发现自己在步骤1中创建的节点序号最小，那么就认为这个客户端获得了锁
-      4. 如果在步骤3中发现自己并非所有子节点中最小的，说明自己还没有获取到锁。此时客户端需要找到比自己小的那个节点，然后对其调用exist()方法，同时注册事件监听
-      5. 之后当这个被关注的节点被移除了，客户端会收到相应的通知。这个时候客户端需要再次调用getChildren(“*locknode*”)方法来获取所有已经创建的子节点，确保自己确实是最小的节点了，然后进入步骤3
-    - 其中最核心的思路就是获取锁时创建一个临时顺序节点，顺序最小的那个才能获取到锁，之后尝试加锁的客户端就监听自己的上一个顺序节点，当上一个顺序节点释放锁之后，自己尝试加锁，其余的客户端都对上一个临时顺序节点监听，不会一窝蜂的去尝试给同一个节点加锁导致羊群效应
-
-- redis主从架构，锁失效的问题
-
-  - master主节点加锁成功，然后主节点挂掉了，但是还没来得及同步到slave，此时从节点slave没有锁的信息，所以并没有加锁成功，其他线程仍然可以拿到锁，这样就可能同时存在两把锁了，就会出现超卖了
-  - redlock来解决
-    - 超过半数redis节点加锁成功才算加锁成功
-  - zookeeper来解决
-    - zk是cp，强一致性，并不是只写主节点，也会同步给从节点follower，只有当集群里面半数以上的机器写入成功，即半数写，才算成功写入，才会返回客户端分段式锁通过商品id的范围进行加锁，分散锁的分布
-
-- 
-
-# 真
-
-- CountDownLatch和CyclicBarrier的区别？
-
-  - CountDownLatch：一个线程(或者多个)， 等待另外N个线程完成某个事情之后才能执行
-
-  - CyclicBarrier：N个线程相互等待，任何一个线程完成之前，所有的线程都必须等待
-
-  - 对于CountDownLatch来说，重点是那个“一个线程”, 是它在等待， 而另外那N的线程在把“某个事情”做完之后可以继续等待，可以终止。而对于CyclicBarrier来说，重点是那N个线程，他们之间任何一个没有完成，所有的线程都必须等待
-
-  - 从字面上理解，CountDown表示减法计数，Latch表示门闩的意思，计数为0的时候就可以打开门闩了。Cyclic Barrier表示循环的障碍物。两个类都含有这一个意思：对应的线程都完成工作之后再进行下一步动作，也就是大家都准备好之后再进行下一步。然而两者最大的区别是，进行下一步动作的动作实施者是不一样的。这里的“动作实施者”有两种，一种是主线程（即执行main函数），另一种是执行任务的其他线程，后面叫这种线程为“其他线程”，区分于主线程。对于CountDownLatch，当计数为0的时候，下一步的动作实施者是main函数；对于CyclicBarrier，下一步动作实施者是“其他线程”
-
-  - ```java
-    import java.util.Random;
-    import java.util.concurrent.CountDownLatch;
-    
-    public class CountDownLatchTest {
-    
-        public static void main(String[] args) throws InterruptedException {
-            CountDownLatch latch = new CountDownLatch(4);
-            for(int i = 0; i < latch.getCount(); i++){
-                new Thread(new MyThread(latch), "player"+i).start();
-            }
-            System.out.println("正在等待所有玩家准备好");
-            latch.await();
-            System.out.println("开始游戏");
-        }
-    
-        private static class MyThread implements Runnable{
-            private CountDownLatch latch ;
-    
-            public MyThread(CountDownLatch latch){
-                this.latch = latch;
-            }
-    
-            @Override
-            public void run() {
-                try {
-                    Random rand = new Random();
-                    int randomNum = rand.nextInt((3000 - 1000) + 1) + 1000;//产生1000到3000之间的随机整数
-                    Thread.sleep(randomNum);
-                    System.out.println(Thread.currentThread().getName()+" 已经准备好了, 所使用的时间为 "+((double)randomNum/1000)+"s");
-                    latch.countDown();
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-    
-            }
-        }
-    }
-    ```
-
-  - 对于CyclicBarrier，假设有一家公司要全体员工进行团建活动，活动内容为翻越三个障碍物，每一个人翻越障碍物所用的时间是不一样的。但是公司要求所有人在翻越当前障碍物之后再开始翻越下一个障碍物，也就是所有人翻越第一个障碍物之后，才开始翻越第二个，以此类推。类比地，每一个员工都是一个“其他线程”。当所有人都翻越的所有的障碍物之后，程序才结束。而主线程可能早就结束了，这里我们不用管主线程
-
-  - ```java
-    import java.util.Random;
-    import java.util.concurrent.BrokenBarrierException;
-    import java.util.concurrent.CyclicBarrier;
-    
-    public class CyclicBarrierTest {
-        public static void main(String[] args) {
-            CyclicBarrier barrier = new CyclicBarrier(3);
-            for(int i = 0; i < barrier.getParties(); i++){
-                new Thread(new MyRunnable(barrier), "队友"+i).start();
-            }
-            System.out.println("main function is finished.");
-        }
-    
-    
-        private static class MyRunnable implements Runnable{
-            private CyclicBarrier barrier;
-    
-            public MyRunnable(CyclicBarrier barrier){
-                this.barrier = barrier;
-            }
-    
-            @Override
-            public void run() {
-                for(int i = 0; i < 3; i++) {
-                    try {
-                        Random rand = new Random();
-                        int randomNum = rand.nextInt((3000 - 1000) + 1) + 1000;//产生1000到3000之间的随机整数
-                        Thread.sleep(randomNum);
-                        System.out.println(Thread.currentThread().getName() + ", 通过了第"+i+"个障碍物, 使用了 "+((double)randomNum/1000)+"s");
-                        this.barrier.await();
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    } catch (BrokenBarrierException e) {
-                        e.printStackTrace();
-                    }
-                }
-            }
-        }
-    }
-    ```
-
-  - 总结：CountDownLatch和CyclicBarrier都有让多个线程等待同步然后再开始下一步动作的意思，但是CountDownLatch的下一步的动作实施者是主线程，具有不可重复性；而CyclicBarrier的下一步动作实施者还是“其他线程”本身，具有往复多次实施动作的特点
-
-- Semaphore？
-
-  - 在信号量上我们定义两种操作： acquire（获取） 和 release（释放）。当一个线程调用acquire操作时，它要么通过成功获取信号量（信号量减1），要么一直等下去，直到有线程释放信号量，或超时。release（释放）实际上会将信号量的值加1，然后唤醒等待的线程
-  - 信号量主要用于两个目的，一个是用于多个共享资源的互斥使用，另一个用于并发线程数的控制
-
-- volatile 总线风暴？
-
-  - MESI（缓存一致性协议）
-    - 当CPU写数据时，如果发现操作的变量是共享变量，即在其他CPU中也存在该变量的副本，会发出信号通知其他CPU将该变量的缓存行置为无效状态，因此当其他CPU需要读取这个变量时，发现自己缓存中缓存该变量的缓存行是无效的，那么它就会从内存重新读取
-  - 嗅探
-    - 每个处理器通过嗅探在总线上传播的数据来检查自己缓存的值是不是过期了，当处理器发现自己缓存行对应的内存地址被修改，就会将当前处理器的缓存行设置成无效状态，当处理器对这个数据进行修改操作的时候，会重新从系统内存中把数据读到处理器缓存里
-  - 由于Volatile的MESI缓存一致性协议，需要不断的从主内存嗅探和cas不断循环，无效交互会导致总线带宽达到峰值
-  - 解决办法：部分volatile和cas使用synchronize
-
 # Java基础
 
 ## 集合
@@ -627,6 +147,116 @@
           return null;
       }
   ```
+
+- CountDownLatch和CyclicBarrier的区别？
+
+  - CountDownLatch：一个线程(或者多个)， 等待另外N个线程完成某个事情之后才能执行
+
+  - CyclicBarrier：N个线程相互等待，任何一个线程完成之前，所有的线程都必须等待
+
+  - 对于CountDownLatch来说，重点是那个“一个线程”, 是它在等待， 而另外那N的线程在把“某个事情”做完之后可以继续等待，可以终止。而对于CyclicBarrier来说，重点是那N个线程，他们之间任何一个没有完成，所有的线程都必须等待
+
+  - 从字面上理解，CountDown表示减法计数，Latch表示门闩的意思，计数为0的时候就可以打开门闩了。Cyclic Barrier表示循环的障碍物。两个类都含有这一个意思：对应的线程都完成工作之后再进行下一步动作，也就是大家都准备好之后再进行下一步。然而两者最大的区别是，进行下一步动作的动作实施者是不一样的。这里的“动作实施者”有两种，一种是主线程（即执行main函数），另一种是执行任务的其他线程，后面叫这种线程为“其他线程”，区分于主线程。对于CountDownLatch，当计数为0的时候，下一步的动作实施者是main函数；对于CyclicBarrier，下一步动作实施者是“其他线程”
+
+  - ```java
+    import java.util.Random;
+    import java.util.concurrent.CountDownLatch;
+    
+    public class CountDownLatchTest {
+    
+        public static void main(String[] args) throws InterruptedException {
+            CountDownLatch latch = new CountDownLatch(4);
+            for(int i = 0; i < latch.getCount(); i++){
+                new Thread(new MyThread(latch), "player"+i).start();
+            }
+            System.out.println("正在等待所有玩家准备好");
+            latch.await();
+            System.out.println("开始游戏");
+        }
+    
+        private static class MyThread implements Runnable{
+            private CountDownLatch latch ;
+    
+            public MyThread(CountDownLatch latch){
+                this.latch = latch;
+            }
+    
+            @Override
+            public void run() {
+                try {
+                    Random rand = new Random();
+                    int randomNum = rand.nextInt((3000 - 1000) + 1) + 1000;//产生1000到3000之间的随机整数
+                    Thread.sleep(randomNum);
+                    System.out.println(Thread.currentThread().getName()+" 已经准备好了, 所使用的时间为 "+((double)randomNum/1000)+"s");
+                    latch.countDown();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+    
+            }
+        }
+    }
+    ```
+
+  - 对于CyclicBarrier，假设有一家公司要全体员工进行团建活动，活动内容为翻越三个障碍物，每一个人翻越障碍物所用的时间是不一样的。但是公司要求所有人在翻越当前障碍物之后再开始翻越下一个障碍物，也就是所有人翻越第一个障碍物之后，才开始翻越第二个，以此类推。类比地，每一个员工都是一个“其他线程”。当所有人都翻越的所有的障碍物之后，程序才结束。而主线程可能早就结束了，这里我们不用管主线程
+
+  - ```java
+    import java.util.Random;
+    import java.util.concurrent.BrokenBarrierException;
+    import java.util.concurrent.CyclicBarrier;
+    
+    public class CyclicBarrierTest {
+        public static void main(String[] args) {
+            CyclicBarrier barrier = new CyclicBarrier(3);
+            for(int i = 0; i < barrier.getParties(); i++){
+                new Thread(new MyRunnable(barrier), "队友"+i).start();
+            }
+            System.out.println("main function is finished.");
+        }
+    
+    
+        private static class MyRunnable implements Runnable{
+            private CyclicBarrier barrier;
+    
+            public MyRunnable(CyclicBarrier barrier){
+                this.barrier = barrier;
+            }
+    
+            @Override
+            public void run() {
+                for(int i = 0; i < 3; i++) {
+                    try {
+                        Random rand = new Random();
+                        int randomNum = rand.nextInt((3000 - 1000) + 1) + 1000;//产生1000到3000之间的随机整数
+                        Thread.sleep(randomNum);
+                        System.out.println(Thread.currentThread().getName() + ", 通过了第"+i+"个障碍物, 使用了 "+((double)randomNum/1000)+"s");
+                        this.barrier.await();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    } catch (BrokenBarrierException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+    }
+    ```
+
+  - 总结：CountDownLatch和CyclicBarrier都有让多个线程等待同步然后再开始下一步动作的意思，但是CountDownLatch的下一步的动作实施者是主线程，具有不可重复性；而CyclicBarrier的下一步动作实施者还是“其他线程”本身，具有往复多次实施动作的特点
+
+- Semaphore？
+
+  - 在信号量上我们定义两种操作： acquire（获取） 和 release（释放）。当一个线程调用acquire操作时，它要么通过成功获取信号量（信号量减1），要么一直等下去，直到有线程释放信号量，或超时。release（释放）实际上会将信号量的值加1，然后唤醒等待的线程
+  - 信号量主要用于两个目的，一个是用于多个共享资源的互斥使用，另一个用于并发线程数的控制
+
+- volatile 总线风暴？
+
+  - MESI（缓存一致性协议）
+    - 当CPU写数据时，如果发现操作的变量是共享变量，即在其他CPU中也存在该变量的副本，会发出信号通知其他CPU将该变量的缓存行置为无效状态，因此当其他CPU需要读取这个变量时，发现自己缓存中缓存该变量的缓存行是无效的，那么它就会从内存重新读取
+  - 嗅探
+    - 每个处理器通过嗅探在总线上传播的数据来检查自己缓存的值是不是过期了，当处理器发现自己缓存行对应的内存地址被修改，就会将当前处理器的缓存行设置成无效状态，当处理器对这个数据进行修改操作的时候，会重新从系统内存中把数据读到处理器缓存里
+  - 由于Volatile的MESI缓存一致性协议，需要不断的从主内存嗅探和cas不断循环，无效交互会导致总线带宽达到峰值
+  - 解决办法：部分volatile和cas使用synchronize
 
 ### ConcurrentHashMap 
 
@@ -3154,6 +2784,40 @@
   - 从：sql执行线程，执行relay log中的语句
 - MySQL之间数据复制的基础是二进制日志文件（binary log file）。一台MySQL数据库一旦启用二进制日志后，其作为master，它的数据库中所有操作都会以“事件”的方式记录在二进制日志中，其他数据库作为slave通过一个I/O线程与主服务器保持通信，并监控master的二进制日志文件的变化，如果发现master二进制日志文件发生变化，则会把变化复制到自己的中继日志中，然后slave的一个SQL线程会把相关的“事件”执行到自己的数据库中，以此实现从数据库和主数据库的一致性，也就实现了主从复制
 - 对于每一个主从复制的连接，都有三个线程。拥有多个从库的主库为每一个连接到主库的从库创建一个binlog输出线程，每一个从库都有它自己的I/O线程和SQL线程
+- 系统如何不停机迁移到分库分表？
+  - 双写，写老库和新库
+  - 然后将老库的历史数据通过工具代码导入到新库
+  - 直到两边库数据一致
+- 分库分表动态扩容方案
+
+- 分库分表后全局id
+
+  - Twitter开源的snowflake 雪花算法，就是把一个64位的long类型的id，1个bit是不用的，用其中的41bit作为毫秒数，用10bit作为工作机器id，12bit作为序列号
+  - 1bit：不用，因为二级制里第一个bit如果为1，那么都是负数，但是我们生成的id都是整数，所以第一个bit统一都为0才行
+  - 41bit：表示的是时间戳，单位毫秒，41bit可以表示的数字多达2^41-1 ，也就是可以表示2^41-1个毫秒值，换算成年就是表示69年的时间
+  - 10bit：记录工作机器id，代表的是这个服务最多可以部署在2^10台机器上，也就是1024台机器，但是10bit里5bit代表机房id，5bit代表机器id，最多代表2^5个机房（32个机房），每个机房可以代表2^5台机器（32台机器）
+  - 12bit：这个是用来记录同一个毫秒内产生的不同id，12bit可以代表的最大正数是2^12-1=4096，也就是说用这个12bit代表的数字来区分同一毫秒内的4096个不同的id
+
+- mysql读写分离？
+
+  - 基于主从架构读写分离，只写主库，读取都去从库读取
+
+- mysql主从复制原理？
+
+  - 主库将变更写入binlog日志，然后从库连接到主库之后，从库有一个IO线程，将主库的binlog日志拷贝到自己本地，写入中继日志中，然后从库有一个SQL线程会从中级日志中读取binlog，然后执行binlog日志中的内容，也就是在自己本地在执行一遍SQL，这样就可以保证自己跟主库的数据一致
+  - 从库同步主库数据的过程是串行化的，即主库上并行的操作，在从库上会串行执行，所以在高并发场景下，从库的数据一定会比主库慢一些，是有延时的，随意经常出现，刚写入主库的数据可能读取不到，要过几十几百毫秒才能读取到
+  - 如果主库突然宕机了，然后恰好数据还没有同步到从库，那么有些数据可能在从库就没有，有些数据可能就丢失了
+
+- 如何解决mysql主从同步的延时问题？
+
+  - mysql提供了半同步机制解决主库数据丢失问题，并行复制解决主从同步延时问题
+  - 半同步机制
+    - 主库写入binlog日志后，就会强制此时立即将数据同步到从库，从库日志写入自己本地的reply log之后，接着会返回一个ack给主库，主库接收到至少一个从库的ack之后才认为写操作完成了
+  - 并行复制机制
+    - 从库开启多线程，并行读取replay log中不同库的日志，然后并行执行不同库的日志，这是库级别的并行
+  - show status，Seconds_Behind_Master，可以看到从库复制主库落后了几秒
+  - 主从复制要根据实际情况场景，建议一般是在读远远多于写，而且读的实时性要求不高；
+  - 如果要求实时性比较高，可以直接强制读取主库，可以通过数据库中间件来实现
 
 # Redis
 
@@ -3275,6 +2939,222 @@
 - Scan
 
 - Pub/Sub
+
+- redis线程模型
+
+  - 文件事件处理器
+    - redis基于reactor模式开发了网络事件处理器，文件事件处理器，file event handler，这个处理器是单线程的，采用IO多路复用机制同时监听多个socket，根据socket上的事件来选中对应的事件处理器来处理事件
+    - 如果被监听的socket准备好了执行accept、read、write、close等操作的时候，跟操作对应的文件事件就会产生，这个时候事件处理器就会调用之前关联好的事件处理器来处理这个事件
+    - 文件事件处理器是单线程，但是通过IO多路复用机制监听了多个socket,可以实现高性能的网络通信模型
+    - 文件事件处理器的结构包含四个部分：多个socket，IO多路复用程序，文件事件分派器，事件处理器(命令请求处理器、命令回复处理器、连接应答处理器)
+    - 多个socket可能并发的产生不同的操作，每个操作对应不同的事件，但是IO多路复用会监听多个socket，会将socket放入一个队列中排队，每次从队列中取出一个socket给事件分派器，事件分派器把socket给对应的事件处理器
+    - 事件分派器会根据每个socket当前产生的事件(accept、read、write、close)，来选择对应的事件处理器
+
+- 为什么redis单线程还这么快？
+
+  - 纯内存操作
+  - 核心是基于非阻塞的IO多路复用机制
+  - 单线程反而避免了多线程的频繁切换问题
+
+- redis过期策略
+
+  - 定期删除+惰性删除
+  - 定期删除是redis默认每隔100ms随机抽取一些过期时间的key，检查过期并删除
+  - 如果定期删除遗漏了很多过期key，并且也没有惰性删除，内存会有大量过期的key，导致redis内存耗尽
+    - 内存淘汰机制
+
+- 手写一个LRU算法
+
+  ```java
+  public class LRUCache<K,V> extends LinkedHashMap<K,V> {
+    	private final int CACHE_SIZE;
+    	// cacheSize表示最多可以换成多少条数据
+    	public LRUCache(int cacheSize) {
+        // 设置一个LinkedHashMap的初始大小，true表示让LinkedHashMap按照访问顺序进行排序，
+        // 最近访问的放在前面，最早访问的放在后面
+        super((int) Math.ceil(cacheSize / 0.75) + 1, 0.75f, true);
+        CACHE_SIZE = cacheSizel;
+      }
+    
+    	@Override
+    	protected boolean removeEldestEntry(Map.Entry eldest) {
+        	// 当map中的数据量大于指定的缓存个数的时候，就自动删除
+        	return size() > CACHE_SIZE;
+      }
+  ```
+
+- redis主从架构，锁失效的问题
+
+  - master主节点加锁成功，然后主节点挂掉了，但是还没来得及同步到slave，此时从节点slave没有锁的信息，所以并没有加锁成功，其他线程仍然可以拿到锁，这样就可能同时存在两把锁了，就会出现超卖了
+  - redlock来解决
+    - 超过半数redis节点加锁成功才算加锁成功
+  - zookeeper来解决
+    - zk是cp，强一致性，并不是只写主节点，也会同步给从节点follower，只有当集群里面半数以上的机器写入成功，即半数写，才算成功写入，才会返回客户端分段式锁通过商品id的范围进行加锁，分散锁的分布
+
+- redis replication的核心机制
+
+  - redis采用异步方式复制数据到slave节点，redis2.8以后开始，slave node会周期地确认自己每次复制的数据量
+  - 一个master node是可以配置多个slave node的
+  - slave node也可以连接其他slave node
+  - slave node做复制的时候，是不会block master node的正常操作
+  - slave node做复制的时候，也不会block对自己的查询操作，他会用旧的数据集来提供服务，但是复制完成的时候，需要删除旧数据集，加载新数据集，这时候就会暂停对外的服务了
+  - slave node 主要用来进行横向扩容，做读写分离，扩容的slave node可以提高吞吐量
+  - 采用主从复制，必须开启master node的持久化
+
+- redis完整主从复制流程
+
+- redis主从架构原理
+
+  - 当启动一个slave node的时候，会发送一个PSYNC命令给master node，如果这是slave node重新连接master，那么master node仅仅只会复制slave部分缺少的数据；如果是slave node第一次连接maste node，那么就会触发一次full resynchronization
+  - 开始full resynchronization的时候，master会启动一个后台线程，开始生成一份RDB快照文件，同时还会将从客户端收到的所有命令缓存在内存中，RDB文件生成完毕之后，master会将这个RDB发送给slave，slave会先写入本地磁盘，然后再从本地磁盘加载到内存中，然后master会将内存中缓存的写命令发送给slave，slave也会同步这些数据
+  - slave node如果跟master node有网络故障，断开了连接，会自动重连，master如果发现有多个slave node都来重新连接，仅仅会启动一个rdb save操作，用一份数据服务所有slave node
+
+- redis主从复制断点续传
+
+  - 从redis2.8 开始，就支持主从复制的断点续传，如果主从复制过程中，网络连接断开了，重新连接后会接着上次复制的地方，继续复制下去，而不是从头开始复制一份
+  - master node会在内存中创建一个backlog，master和slave都会保存一个replica offset，还有一个master id，offset 就是保存在backlog中，如果master和slave网络断开重新连接后，slave会让master从上次的replica offset开始继续复制
+  - 如果没有找到对应的offset，那么就会进行full resynchronization
+  - master会在自身不断累加offset，slave也会不断在自身累加offset，slave每秒会上报自己的offset给master，同时master也会记录每个slave的offset
+
+- redis无磁盘复制
+
+  - master在内存中直接创建rdb，然后发送给slave，不会在自己本地落地磁盘了
+  - repl-diskless-sync
+  - repl-diskless-sync-delay  等待多久可以开始复制，默认5秒，需要等待slave重新连接过来
+
+- redis过期key
+
+  - slave不会过期key，只会等待master过期key，如果master过期了一个key，或者通过LRU算法淘汰了一个key，那么会模拟一条del命令发送给slave
+
+- redis高可用（故障转移failover，主备切换）
+
+- redis哨兵模式
+
+  - 集群监控，负责监控redis master和slave进程是否正常工作
+  - 消息通知，如果某个redis实例有故障，那么哨兵模式负责发送消息作为报警通知管理员
+  - 故障转移，如果master node挂掉了，会自动转移到slave node上
+  - 配置中心，如果故障转移发送了，通知client客户端新的master地址
+  - 哨兵至少需要3个实例，来保证自己的健壮性
+  - 哨兵+redis主从的部署架构，是不会保证数据零丢失的，只能保证redis集群的高可用
+
+- 为什么redis哨兵模式2个节点无法正常工作？
+
+  - 哨兵2个节点，如果挂掉了1个，只剩下1个哨兵，是没有办法故障转移的
+
+- redis主从复制数据丢失情况
+
+  - 主备切换过程中，可能造成数据丢失；
+    - 因为master - slave 的复制是异步的，所以有可能有部分数据还没复制到slave，master就宕机了，此时这部分数据丢失了
+  - 脑裂数据丢失
+    - 某个master的网络出现异常突然断开了和其他slave的连接，但是实际上master并没有挂掉，此时哨兵可能就会认为master宕机了，然后开启选举，将其他slave切换成了master，此时集群里面就出现了两个master，这种情况叫做脑裂
+    - 此时虽然某个slave被切换成了master，但是可能client端还没来得及切换到新的master，还继续向旧的master写数据，当旧的master再次恢复时，会被作为一个slave挂到新的master，自己的数据被清空，重新从新的master复制数据
+  - 解决方案
+    - min-slave-to-write 1  减少异步复制的数据丢失
+      - 要求至少有1个slave，数据复制和同步的延迟不超过10秒
+      - 一旦slave复制数据和ack延时太长，就认为可能master宕机后损失的数据太多了，那么就拒绝写请求，这样可以把master宕机时由于部分数据未同步到slave导致的数据丢失降低在可控范围内
+    - min-slave-max-lag 10  减少脑裂的数据丢失
+      - 如果一个master出现了脑裂，跟其他的slave丢了连接，上面两个配置可以保证，如果不能继续给指定数量的slave发送数据，而且slave超过10秒没有给自己ack消息，那么就直接拒绝客户端的写请求，这样脑裂后的旧master就不会接收client的新数据，也就避免了数据丢失；
+      - 脑裂情况下，最多丢失10秒的数据
+    - 当master不接受新的写请求了，client怎么办？
+      - client会做降级，写到本地磁盘，client对外接收的请求再做降级，做限流，减慢请求涌入的速度
+      - client将请求写入Kafka消息队列，每隔10分钟去队列里取一次，尝试重新发回master
+
+- redis主观宕机和客观宕机
+
+  - 主观宕机：如果一个哨兵觉得一个master挂掉了，这叫主观宕机
+    - 如果一个哨兵ping一个master，超过了is-master-down-after-millisecods指定的毫秒数之后
+  - 客观宕机：如果quorum数量的哨兵都觉得这个master挂掉了，这叫客观宕机
+
+- redis哨兵和slave集群的自动发现机制
+
+  - 哨兵相互之间的发现，是通过redis的pub/sub系统实现的，通过消费消息相互感知彼此的存在；
+  - 每个哨兵都会往_sentinel_:hello 这个channel发送一条消息，内容是自己的host、ip和runid还有对这个master的监控配置，其他哨兵消费这个消息就可以感知到这个哨兵的存在
+  - 每个哨兵还会跟其他哨兵交换master的监控配置，互相进行监控配置的同步
+
+- redis slave 的选举
+
+  - 选举slave会考虑slave的信息
+    - 跟master断开连接的时长
+    - slave优先级
+    - 复制offset
+    - run id
+  - 如果一个slave跟master断开连接已经超过了down-after-millisecods的10倍，外加master宕机的时长，那么slave就被认为不适合选举master  (down-after-milliseconds * 10) + millisecods_since_master_is_in_SDOWN_state
+  - 对slave进行排序
+    - 按照slave的优先级进行排序，slave priority 越低，优先级越高
+    - 如果slave priority相同，那么看replica offset，哪个slave复制了越多的数据，offset越靠后，优先级越高
+    - 如果上面两个条件相同，那么选择一个run id比较小的那个slave，id越小表示越早启动，数据越完整
+
+- redis quorum和majority
+
+  - 每次一个哨兵要做主备切换，首先需要quorum数量的哨兵认为主观宕机，然后选举出一个哨兵来做切换，这个哨兵还得得到majority哨兵的授权，才能正式执行切换
+  - 如果quorum < majority，比如5个哨兵，majority是3，quorum设置为2，那么就3个哨兵授权可以切换
+  - 如果quorum >= majority，那么必须quorum数量的哨兵都授权，比如5个哨兵，quorum是5，那么必须5个哨兵都同意授权，才能正式执行
+
+- redis configuration epoch
+
+  - 执行切换的那个哨兵，会从要切换到的新master那里得到一个configuration epoch，这就是一个version号，每次切换的version号都必须是唯一的，如果第一个选举出的哨兵切换失败了，那么其他哨兵，会等待failover-timeout时间，然后接着继续执行切换，此时会重新获取一个新的configuration epoch，作为新的version号
+
+- redis configuration传播
+
+  - 哨兵完成切换后，会在自己本地更新生成最新的master配置，然后同步给其他的哨兵，就是通过之前说的pub/sub消息机制
+  - 一个哨兵完成一次新的切换后，新的master配置是跟着新的version号的，其他的哨兵都是根据版本号的大小更新自己的master配置
+
+- redis持久化
+
+  - AOF和RDB同时使用
+  - 用AOF来保证数据不丢失，作为数据恢复的第一选择
+  - 用RDB来做不同程度的冷备，在AOF文件都丢失或损坏不可用的时候，还可以使用RDB来进行快速的数据恢复
+
+- redis cluster 和 replication sentinel
+
+  - replication sentinel，一个master，多个slave，要几个slave跟你要求的吞吐量有关系，搭建sentinel集群，保证redis主从架构高可用
+  - redis cluster，主要针对的是海量数据+高并发+高可用场景
+
+- redis cluster 基本原理
+
+  - cluster 自动将数据分片，每个master上放一部分数据；提供内置的高可用机制，部分master不可用时，还是可以继续工作
+  - 在redis cluster集群架构下，每个redis要开放两个端口，比如一个是6379，另外一个就是加10000的端口号，即16379，这个端口是给集群之间通信使用的，即cluster bus，集群总线，用来故障检测，配置更新，故障转移授权，cluster bus用了另一种二进制协议，主要用于节点间进行高效的数据交换，占用更少的网络带宽和处理时间
+  - 一致性hash算法（自动缓存迁移）+ 虚拟节点（自动负载均衡）
+  - redis cluster的hash slot算法
+    - redis cluster 有固定的16384个hash slot，对每个key计算CRC16值，然后对16384取模，可以获取key对应的hash slot
+    - redis cluster 中每个master持有部分slot，比如有3个master，那么可能每个master持有5000多个hash slot
+    - hash slot 让node的增加和移除很简单，增加一个master，就将其他的master的hash slot移动部分过去，减少一个master，就将它的hash slot移动到其他的master上去，移动的hash solt 的成本是非常低的
+    - 客户端的api， 可以对指定的数据，让他们走同一个hash slot，通过hash tag 来实现
+
+- 为什么删除缓存，而不是更新缓存？
+
+  - 因为缓存有时候并不是只查询数据库就可以实现的，可能需要查询另外两个表的数据，然后进行计算才能计算出缓存的最新值，如果是更新缓存，代价是非常大的，如果频繁地修改一个缓存，那么缓存也会被频繁的更新，但是这个缓存不并一定会访问到，所以还是删除以后，等真正访问的时候再去同步更新缓存数据
+
+- 缓存与数据库双写不一致的情况，如何处理？
+
+  - 更新数据的时候，根据数据的唯一标识，将操作路由到一个jvm内存队列里面，读取数据的时候，如果发现数据不再缓存中，那么将重新读取数据+更新缓存的操作，根据唯一标识，也发送到刚刚的jvm内存队列里面，一个队列对应一个线程
+  - 每个线程串行拿到对应的操作，一个一个地执行，这样，一个数据变更操作，先执行，删除缓存，然后再去更新数据库，但是还没有更新完成，此时如果来了一个读请求，读到了空的请求，那么可以先将缓存更新的请求发送到队列中，此时会在队列中积压，然后同步等待缓存更新完成，这里有一个优化点，一个队列中，其实多个更新缓存请求串在一起是没有意义的，因此可以过滤，如果发现队列中已经有一个更新缓存的请求了，那么就不用再放这个更新请求操作了，直接等待前面的更新操作更新完成即可
+  - 待那个队列对应的工作线程完成了上一个操作的数据库的修改之后，才会去执行下一个操作，也就是缓存更新的操作，此时会从数据库中读取最新的值，然后写入缓存中，如果请求还在等待时间范围内，不断轮询发现可以取到值了，那么直接返回，如果请求等待的时间超过一定时长，那么这一次直接从数据库中读取当前的旧值
+  - 读请求超时阻塞
+    - 由于读请求也加入了内存队列，所以每个读请求必须在超时时间范围内返回
+    - 最大风险点：可能数据更新很频繁，导致队列中积压了大量更新操作在里面，然后读请求发生大量的超时，最后导致大量的请求直接走数据库，务必通过一些真实模拟测试，看看业务数据频繁程度如何
+    - 如果一个内存队列可能积压的更新操作非常特别多，那么就要加机器，让每个机器上部署的服务实例来分摊请求，那么每个内存队列中积压的更新操作就会越少
+    - 根据实际项目经验：一般来说数据的写频率是很低的，因此实际上正常来说，在队列中积压的更新操作应该很少的，针对高并发，读缓存架构的项目，一般写请求相对读请求，是非常少的，每秒的qps能到几百就不错了
+    - 一秒，500个写操作，5份，没200ms，就100个写操作，单机器，20个内存队列，每个内存队列，可能就积压5个写操作，每个写操作性能测试，一般20ms左右就完成，那么针对每个内存队列中的数据的读请求，也就是最多hang一会儿，200ms以内肯定就能返回了
+    - 而且写操作还做了去重操作，所以也就是一个更新缓存的操作在后面，数据更新完成后，读请求触发更新操作也完成，然后临时等待的读请求全部可以读到缓存中的数据
+  - 读请求并发了过高
+    - 还有一个风险：就是突然间大量读请求会在几十毫秒的延时hang在服务器上，看服务能不能抗住，需要多少机器才能抗住最大的极限情况峰值
+    - 但是因为不是所有数据都是在同一时间更新， 缓存也不会在同一时间失效，所以每次可能也就是少量数据的缓存失效了，然后那些数据对应的请求过来，并发量应该也不是很大
+    - 按1:99的比列算计算读和写请求，每秒5万的qps，可能只有500次更新操作
+
+- redis并发竞争的问题？如何解决？了解redis事务的CAS方案吗？
+
+  - 就是多客户端同时并发写一个key，可能本来应该先到的数据后到了，导致数据版本错了，或者是多客户端同时获取一个key，修改值之后再写回去，只要顺序错了，数据就错了，redis自己就有天然解决这个问题的CAS类的乐观锁方案
+  - 确保同一时间只能有一个系统实例在操作某个key，别人不允许操作
+  - 每次要写时间，先判断一下当前这个key的时间戳是否比缓存里的value的时间戳更新，如果更新就可以写，否则不写
+  - 即分布式锁+时间戳
+  - 在并发量过大的情况下,可以通过消息中间件进行处理,把并行读写进行串行化，把Redis.set操作放在队列中使其串行化,必须的一个一个执行
+
+- 生产环境的redis部署结构？用了哪种集群？有没有做高可用保证？有没有开启持久化机制可以进行数据恢复？线上redis分配几个G的内存？设置了哪些参数？压测后你们redis集群承载多少QPS？
+
+  - redis cluster, 10台机器，5台机器部署了redis主实例，另外5台部署了从实例，每个主实例挂了一个从实例，5个节点对外提供读写服务，每个节点的读写高峰qps可以达到每秒5万，5台机器最多是25万读写请求/s
+  - 机器配置，32G+8核CPU+1T硬盘，但是分配给redis的是10g内存，一般生产环境，redis的内存尽量不要超过10G
+  - 高可用，任何一台主实例宕机，都会自动故障迁移
 
 ## 分布式锁
 
@@ -3830,6 +3710,20 @@
 - 一个Watch事件是一个一次性的触发器，当被设置了Watch的数据发生了改变的时候，则服务器将这个改变发送给设置了Watch的客户端，以便通知它们
 - 为什么不是永久的，举个例子，如果服务端变动频繁，而监听的客户端很多情况下，每次变动都要通知到所有的客户端，给网络和服务器造成很大压力
 - 一般是客户端执行getData(“/节点A”,true)，如果节点A发生了变更或删除，客户端会得到它的watch事件，但是在之后节点A又发生了变更，而客户端又没有设置watch事件，就不再给客户端发送。在实际应用中，很多情况下，我们的客户端不需要知道服务端的每一次变动，我只要最新的数据即可
+- ZK分布式锁羊群效应
+
+  - 现象
+    - zk的客户端可以在znode上添加一个watch，用来监听znode相关事件并被通知
+    - 羊群效应就是 一个特定的znode 改变的时候ZooKeper 触发了所有watches 的事件
+    - 举个例子，如果有1000个客户端watch 一个znode的exists调用，当这个节点被创建的时候，将会有1000个通知被发送。这种由于一个被watch的znode变化，导致大量的通知需要被发送，将会导致在这个通知期间的其他操作提交的延迟。因此，只要可能，我们都强烈建议不要这么使用watch。仅仅有很少的客户端同时去watch一个znode比较好，理想的情况是只有1个
+  - 解决方案
+    - 每个锁竞争者，只需要关注”*locknode*”节点下序号比自己小的那个节点是否存在即可
+      1. 客户端调用create()方法创建名为“*locknode*/guid-lock-”的节点，需要注意的是，这里节点的创建类型需要设置为EPHEMERAL_SEQUENTIAL
+      2. 客户端调用getChildren(“*locknode*”)方法来获取所有已经创建的子节点，注意，这里不注册任何Watcher
+      3. 客户端获取到所有子节点path之后，如果发现自己在步骤1中创建的节点序号最小，那么就认为这个客户端获得了锁
+      4. 如果在步骤3中发现自己并非所有子节点中最小的，说明自己还没有获取到锁。此时客户端需要找到比自己小的那个节点，然后对其调用exist()方法，同时注册事件监听
+      5. 之后当这个被关注的节点被移除了，客户端会收到相应的通知。这个时候客户端需要再次调用getChildren(“*locknode*”)方法来获取所有已经创建的子节点，确保自己确实是最小的节点了，然后进入步骤3
+    - 其中最核心的思路就是获取锁时创建一个临时顺序节点，顺序最小的那个才能获取到锁，之后尝试加锁的客户端就监听自己的上一个顺序节点，当上一个顺序节点释放锁之后，自己尝试加锁，其余的客户端都对上一个临时顺序节点监听，不会一窝蜂的去尝试给同一个节点加锁导致羊群效应
 
 # Dubbo
 
@@ -4249,6 +4143,62 @@
   - 如果Group ID未产生死信消息，消息队列RocketMQ不会为其创建死信队列
   - 一个死信队列包含了Group ID产生的所有死信消息，不论该消息属于哪个Topic
 - 消息幂等性
+- RocketMQ如何保证生产者消息不丢失？
+  - 使用事务，但是事务会降低吞吐量
+  - 使用confirm模式，写成功会返回一个ack，失败会返回nack，具体根据业务来处理
+  - 事务机制和confirm机制的区别
+    - 事务机制是同步的，你提交一个事务之后会阻塞在那里，但是confirm机制是异步的，你发送消息后就可以继续执行流程，如果消息发送成功后，broker会异步回调接口通知这个消息已经收到了
+- RocketMQ如何保证broker消息不丢失？
+
+  - 持久化，发送消息将消息的deliveryMode设置为2，将消息持久化到磁盘
+  - 持久化可以和生产者的confirm机制配合起来，只有消息持久化到磁盘之后，才会通知生产者ack；这样即使rabbitmq挂了，没有持久化成功，生产者也收不到ack，生产者可以继续重发
+
+- RocketMQ如何保证消费者消息不丢失？
+
+  - 关闭自动ack，手动ack
+
+- Kafka丢失消息场景
+
+  - Kafka某个broker宕机了，重新选举partition的leader时，此时其他的follower刚好还有些数据没有同步，结果此时leader挂了，然后选举某个follower成leader之后，就丢失数据了
+
+- Kafka如何保证不丢失消息？
+
+  - 给topic设置replication.factor参数，这个值必须大于1，要求每个partition必须有至少2个副本
+  - 在Kafka服务端设置min.insync.replicas参数，这个值必须大于1，要求leader至少感知有至少一个follower还跟自己保持联系，没掉队，这样才能确保leader挂了还有一个follower
+  - producer端设置acks=all 必须是写入所有replica之后，才能认为写成功了
+  - producer端设置retries=max 一旦写入是不，无限重试，卡在这里了
+
+- 如何保证消息的顺序性？
+
+  - rabbitmq
+    - 拆分多个queue，每个queue一个consumer，queue里面的消息是按顺序来的；一个queue对应一个consumer，然后这个consumer内部用内存对了排队，然后分发给底层不同的worker来处理
+  - Kafka
+    - 一个topic，一个partition，一个consumer，内部单线程消费，写N个内存queue，然后N个线程分别消费一个内存queue
+    - 一个partition中的数据是有顺序的，生产者在写的时候，可以指定一个key，比如说你指定某个订单id作为key，这个订单的相关数据，一定会被分发到一个partition中去，而且这个partition中的数据一定是有顺序的
+
+- 如何解决消息队列的延时以及过期失效问题？
+
+  - rabbitmq可以设置过期时间，就是TTL，如果消息再queue中积压超过一定时间就会被rabbitmq给清理掉，但是不建议设置过期时间
+  - 如果消息丢弃了，只能写程序将丢失的数据一点点查出来，然后重新灌入mq里面，补数据
+
+- 消息队列满了以后该怎么处理？
+
+  - 写临时程序，接入数据来消费，消费一个丢弃一个，快速消费掉所有消息，然后再补已经丢失的数据
+
+- 有几百万消息持续堆积几个小时，如何处理？
+
+  - 先修复consumer的问题，确保其消费速度，然后将现有的consumer都停掉
+  - 临时建立好原先10倍或者20倍的queue数量
+  - 然后写一个临时的分发数据的consumer程序，这个程序部署上去消费积压的数据，消费之后不做耗时处理，直接均匀轮询写入临时建立好的10倍数量的queue
+  - 接着临时征用10倍的机器来部署consumer，每一批consumer消费一个临时queue的数据
+  - 这种做法相当于是临时将queue资源和consumer资源扩大10倍，以政策的10倍速度消费数据
+  - 等快速消费积压数据之后，得恢复原形部署架构，重新用原来的consumer及其来消费信息
+
+- 如果让你来设计一个消息队列？
+
+  - 首先mq支持可伸缩性，需要的时候可以快速扩容，可以增加吞吐量，分布式系统，参照Kafka的设计理念，broker->topic->partition，每个partition放一个机器，就存一部分数据，扩容时给topic增加partition，然后做数据迁移，增加机器
+  - mq的数据落盘问题，落盘才能保证数据完整性，顺序写
+  - mq的高可用，多副本->leader & follower -> broker挂了重新选举leader
 
 ## Kafka
 
@@ -4709,83 +4659,9 @@
 
 - Kafka在于分布式架构，RabbitMQ基于AMQP协议来实现，RocketMQ的思路来源于Kafka，改成了主从结构，在事务性可靠性方面做了优化。广泛来说，电商、金融等对事务性要求很高的，可以考虑RabbitMQ和RocketMQ，对性能要求高的可考虑Kafka
 
-# 线上问题分析
 
-- dump
-  - 线程Dump
-  - 内存Dump
-  - gc情况
-- dump获取及分析工具
-  - jstack
-  - jstat
-  - jmap
-  - jhat
-  - Arthas
-- dump分析死锁
-- dump分析内存泄露
-- 自己编写各种outofmemory，stackoverflow程序
-  - HeapOutOfMemory
-  - Young OutOfMemory
-  - MethodArea OutOfMemory
-  - ConstantPool OutOfMemory
-  - DirectMemory OutOfMemory
-  - Stack OutOfMemory Stack OverFlow
-- Arthas
-  - jvm相关
-  - class/classloader相关
-  - monitor/watch/trace相关
-  - options
-  - 管道
-  - 后台异步任务
-- 常见问题解决思路
-  - 内存溢出
-  - 线程死锁
-  - 类加载冲突
-  - load飙高
-  - CPU利用率飙高
-  - 慢SQL
-- 使用工具尝试解决以下问题，并写下总结
-  - 当一个Java程序响应很慢时如何查找问题
-  - 当一个Java程序频繁FullGC时如何解决问题
-  - 如何查看垃圾回收日志
-  - 当一个Java应用发生OutOfMemory时该如何解决
-  - 如何判断是否出现死锁
-  - 如何判断是否存在内存泄露
-  - 使用Arthas快速排查Spring Boot应用404/401问题
-  - 使用Arthas排查线上应用日志打满问题利用Arthas排查Spring Boot应用NoSuchMethodErro
 
-# 操作系统知识
-
-- Linux的常用命令
-  - find、grep、ps、cp、move、tar、head、tail、netstat、lsof、tree、wget、curl、ping、ssh、echo、free、top
-    进程间通信
-- 服务器性能指标
-  - load
-  - CPU利用率
-  - 内存使用情况
-  - qps
-  - rt
-- 进程同步
-  - 生产者消费者问题
-  - 哲学家就餐问题
-  - 读者写者问题
-- 缓冲区溢出
-- 分段和分页
-- 虚拟内存与主存
-- 虚拟内存管理
-- 换页算法
-- 二进制中的原码、反码、补码
-  - 二进制的最高位是符号位：0表示正数，1表示负数
-  - 正数的原码、反码、补码都一样
-  - 负数的反码 =  它的原码符号位不变，其他位取反（0 ->1 ; 1->0 ）
-  - 负数的补码 = 它的反码 +1
-  - 0的反码、补码都是0
-  - 在计算机运算的时候，都是以补码的方式来运算的
-  - 负数的反码=绝对值位-128
-
-# 架构篇
-
-## CAP
+# CAP
 
 - C - Consistent，一致性
 - A - Availability，可用性
@@ -4793,7 +4669,7 @@
 - CAP原理概括：网络分区发生时，一致性和可用性两难全
   - 在网络分区发生时，两个分布式节点之间无法进行通信，我们对一个节点进行的修改操作无法同步到另外一个节点，所以数据的 「一致性」将无法满足，因为两个分布式节点的数据不再保持一致。除非牺牲「可用性」，也就是暂停分布式节点服务，在网络分区发生时，不再提供修改数据的功能，直到网络状况完全恢复正常在继续对外提供服务
 
-## BASE理论
+# BASE理论
 
 - BASE：全称：Basically Available(基本可用)，Soft state（软状态）,和 Eventually consistent（最终一致性）三个短语的缩写，来自 ebay 的架构师提出
 - Base 理论是对 CAP 中一致性和可用性权衡的结果，其来源于对大型互联网分布式实践的总结，是基于 CAP 定理逐步演化而来的。其核心思想是：
@@ -4829,7 +4705,7 @@
   - BASE支持的是大型分布式系统，提出通过牺牲强一致性获得高可用性
   - 总的来说，BASE 理论面向大型高可用可扩展的分布式系统，与ACID这种强一致性模型不同，常常是牺牲强一致性来获得可用性，并允许数据在一段时间是不一致的。虽然两者处于【一致性-可用性】分布图的两级，但两者并不是孤立的，对于分布式系统来说，往往依据业务的不同和使用的系统组件不同，而需要灵活的调整一致性要求，也因此，常常会组合使用ACID和BASE
 
-## 分布式
+# 分布式
 
 - 分布式理论
   - 2PC、3PC、CAP、BASE
@@ -4861,7 +4737,7 @@
   - Paxos 算法与 Raft 算法
   - ZAB算法
 
-## 领域驱动设计
+# 领域驱动设计
 
 - 实体、值对象
 - 聚合、聚合根
@@ -4870,7 +4746,7 @@
 - 充血模型和贫血模型
 - DDD和微服务有什么关系
 
-## 微服务
+# 微服务
 
 - SOA
 - 康威定律
@@ -4880,7 +4756,7 @@
 - Spring Boot
 - Spring Cloud
 
-## 高并发
+# 高并发
 
 - 分库分表
 - 横向拆分与水平拆分
@@ -4889,7 +4765,7 @@
 - 消息队列
 - RabbitMQ、RocketMQ、ActiveMQ、Kafka 各个消息队列的对比
 
-## 高可用
+# 高可用
 
 - 双机架构
   - 主备复制
@@ -4897,7 +4773,7 @@
   - 主主复制
 - 异地多活
 
-## 高性能
+# 高性能
 
 - 高性能数据库
   - 读写分离
@@ -4909,7 +4785,7 @@
 - 负载均衡
 - PPC、TPC
 
-## 负载均衡
+# 负载均衡
 
 - 负载均衡分类
   - 二层负载均衡
@@ -4925,27 +4801,9 @@
   - 静态负载均衡算法：轮询，比率，优先权
   - 动态负载均衡算法: 最少连接数,最快响应速度，观察方法，预测法，动态性能分配，动态服务器补充，服务质量，服务类型，规则模式
 
-## DNS
-
-- DNS原理
-- DNS设计
-
-## CDN
-
-- 数据一致性
-
-## 云计算
-
-- IaaS
-- SaaS
-- PaaS
-- 虚拟化技术
-- openstack
-- Serverlsess
 
 
-
-## 搜索引擎
+# 搜索引擎
 
 ## Solr
 
@@ -5087,9 +4945,7 @@
   - 如果是更新操作，就是将原来的 doc 标识为 deleted 状态，然后新写入一条数据
   - buffer 每 refresh 一次，就会产生一个 segment file，所以默认情况下是 1 秒钟一个 segment file，这样下来 segment file 会越来越多，此时会定期执行 merge。每次 merge 的时候，会将多个 segment file 合并成一个，同时这里会将标识为 deleted 的 doc 给物理删除掉，然后将新的 segment file 写入磁盘，这里会写一个 commit point，标识所有新的 segment file，然后打开 segment file 供搜索使用，同时删除旧的 segment file
 
-# 运维
-
-## 网络
+# 网络
 
 - VMware 网络
   - 在VMware中，虚拟机的网络连接主要是由VMware创建的虚拟交换机(也叫做虚拟网络)负责实现的，VMware可以根据需要创建多个虚拟网络。在Windows系统的主机上，VMware最多可以创建20个虚拟网络，每个虚拟网络可以连接任意数量的虚拟机网络设备在Linux系统的主机上，VMware最多可以创建255个虚拟网络，但每个虚拟网络仅能连接32个虚拟机网络设备
@@ -5105,13 +4961,13 @@
   - 仅主机模式，是一种比NAT模式更加封闭的的网络连接模式，它将创建完全包含在主机中的专用网络。仅主机模式的虚拟网络适配器仅对主机可见，并在虚拟机和主机系统之间提供网络连接。相对于NAT模式而言，仅主机模式不具备NAT功能，因此在默认情况下，使用仅主机模式网络连接的虚拟机无法连接到Internet(在主机上安装合适的路由或代理软件，或者在Windows系统的主机上使用Internet连接共享功能，仍然可以让虚拟机连接到Internet或其他网络)
   - 在同一台主机上可以创建多个仅主机模式的虚拟网络，如果多个虚拟机处于同一个仅主机模式网络中，那么它们之间是可以相互通信的；如果它们处于不同的仅主机模式网络，则默认情况下无法进行相互通信(可通过在它们之间设置路由器来实现相互通信)
 
-## Linux
+# Linux
 
-## Jenkins
+# Jenkins
 
-## Docker
+# Docker
 
-## Kubernetes
+# Kubernetes
 
 # 数据结构与算法
 
@@ -5198,98 +5054,3 @@
   - 数据库索引
   - mapreduce
 
-# 大数据
-
-## Hadoop
-
-## Hive
-
-## Hbase
-
-## 流式计算
-
-- Storm
-- Spark
-- Flink
-
-## 分布式日志收集
-
-- flume
-- Kafka
-- logstash
-
-## 数据挖掘
-
-- mahout
-
-# 网络安全知识
-
-- XSS
-  - XSS的防御
-- CSRF
-- 注入攻击
-  - SQL注入
-  - XML注入
-  - CRLF注入
-- 文件上传漏洞
-- 加密与解密
-  - 对称加密
-  - 非对称加密
-  - 哈希算法
-  - 加盐哈希算法
-- 加密算法
-  - MD5，SHA1、DES、AES、RSA、DSA
-- 彩虹表
-- DDOS攻击
-  - DOS攻击
-  - DDOS攻击
-  - memcached为什么可以导致DDos攻击
-  - 什么是反射型DDoS
-  - 如何通过Hash碰撞进行DOS攻击
-- SSL、TLS，HTTPS
-- 脱库、洗库、撞库
-
-# 区块链
-
-- 哈希算法
-- Merkle树
-- 公钥密码算法
-- 共识算法
-- Raft协议
-- Paxos 算法与 Raft 算法
-- 拜占庭问题与算法
-- 消息认证码与数字签名
-- 比特币
-  - 挖矿
-  - 共识机制
-  - 闪电网络
-  - 侧链
-  - 热点问题
-  - 分叉
-- 以太坊
-- 超级账本
-
-# 人工智能
-
-- 数学基础
-- 机器学习
-- 人工神经网络
-- 深度学习
-- 应用场景
-- 常用框架
-  - TensorFlow
-  - DeepLearning4J
-
-# LOT
-
-# 其他语言
-
-- Groovy
-- Kotlin
-- Python
-- Go
-- NodeJs
-- Swift
-- Rust
-
-  

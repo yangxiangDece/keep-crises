@@ -1,0 +1,178 @@
+技术交流
+
+微信：
+luckylucky421302
+加微信备注k8s即可进群交流学习
+
+课程内容可参考如下链接
+https://mp.weixin.qq.com/s?__biz=MzU0NjEwMTg4Mg==&mid=2247484111&idx=1&sn=0db3aaedd3f01f412704d45a6627633d&chksm=fb638ddacc1404cc9ba8af00cf031b96f5d4fe571cb1715bfbe4d2bd4768abd551e0fa4f9c40&token=1570124030&lang=zh_CN#rd
+
+kubernetes的github地址：
+https://github.com/kubernetes/kubernetes
+kubernetes官方站点：
+https://kubernetes.io/
+https://kubernetes.io/zh/
+https://kubernetes.io/docs/
+
+一、kubernetes基本介绍
+
+1.kubernetes是什么？
+Kubernetes是一个可移植、可扩展的、开源的容器管理平台，简称k8s，可用于管理多个主机上的容器化应用程序。 提供应用程序的快速部署，维护和扩展的基本机制。Kubernetes提供了应用程序的快速部署、扩缩容，升级和回滚的能力，利用service可以实现服务注册、发现和四层负载均衡，通过cordns可实现域名解析，通过ingress可以实现七层负载均衡等功能。Kubernetes这个名字源于希腊语，意思是舵手或飞行员。谷歌在2014年开放了Kubernetes项目，Kubernetes建立在谷歌拥有大量运行生产工作量的十五年经验的基础上，结合了社区中的最佳创意和实践，社区活跃度很高。
+
+2.kubernetes容器编排工具具有哪些优势？
+1）灵活部署
+kubernetes支持在多种平台部署，可在私有云，公有云，混合云，openstack、openshift、VMware vSphere，VMware Workstation，虚拟机，物理机等环境部署。
+2）安全高效，拥有完善的认证授权机制，自带审计功能
+可以对多用户做细化的授权管理（如rbac授权），达到相互之间的操作完全隔离，互不影响，而且自身带有审计功能，可以对操作过程进行实时的日志记录，出现问题可以方便排查。
+3）负载均衡
+支持四层、七层负载均衡，可用于多种场景。
+4）可扩展性强
+拥有强大的集群扩展能力，可以根据业务规模自动增加和缩减主机节点的数量，确保服务可以承受大量并发带来的压力，保证业务稳定运行。
+5）根据节点资源的使用情况对pod进行合理的调度
+可以按照用户需要调度pod，例如保证Pod只在资源足够的节点上运行，会尝试把同一功能的pod分散在不同的节点上，还会尝试平衡不同节点的资源使用率等。
+6）拥有完善的灾备预警方案
+拥有多种灾备解决方案，支持备份和容灾，出现故障可以达到秒级切换，保证线上业务不受影响；
+
+3.kubernetes的功能
+1）多租户网络隔离
+Kubernetes支持多种网络插件，如flannel，calico，canel等，每个插件都有独特的性能，可以分别适用于多种场景，我们可以利用calico的network policy（网络策略）解决k8s中的网络隔离，对于多租户场景，可以每一个用户一个名称空间（namespace），然后对这个名称空间设置网络隔离。
+2）高可用，高可扩展性
+kubernetes中支持多种高可用解决方案，如keepalive+nginx，keepalived+haproxy等，可以使访问流量分发到不同的主机节点，减轻节点压力，如果某个节点出现故障，可以实现妙级切换，达到高可用，保证业务不中断。
+3）用户数据的持久化存储
+kubernetes支持多种持久化存储解决方案，保证数据可以得到很好的备份，降低用户数据丢失的风险，kubernetes中可使用的存储方案如下：
+  本地存储：emptyDir，hostPath
+  网络连接类存储：
+        SAN（存储局域网络）：iSCSI
+        NAS（网络附加存储）：nfs，cifs
+  分布式存储：glusterfs，ceph-块级别的存储，cephfs-文件系统级别的存储
+  云存储：Azure Disk等
+4）拥有多种更新回滚策略
+通过管理kubernetes的控制器和service等，可以实现灰度发布，蓝绿部署，金丝雀发布等，达到业务的快速部署和回滚等操作，用以满足不同客户的不同升级需求。
+5）弹性伸缩
+根据访问的流量压力，可以实现pod的水平扩容和缩减，达到秒级扩容，让pod始终处于满足业务正常运行时所需的数量即可，避免了资源的浪费。
+6）节省资源，优化硬件资源的使用
+根据流量进行业务组件的扩缩容，可节省机器资源。
+
+4.kubernetes应用场景
+1）通过kubernetes部署高效的日志管理系统
+在生产环境中，日志对于排查问题至关重要，我们需要有一个日志管理系统，如efk这个最受欢迎的日志管理系统。kubernetes可以实现efk的快速部署和使用，通过statefulset控制器部署elasticsearch组件，es用来存储日志数据，还可通过动态volumeclaimtemplate动态生成pv实现es数据的持久化存储。通过deployment部署kibana组件，实现日志的可视化管理。通过daemonset控制器部署fluentd组件，来收集节点和k8s集群的日志。
+kubernetes中部署efk可实现如下功能：
+如果集群扩容，那么daemonset控制器会自动检测到新增加的node节点，就会在新的node节点上部署fluentd，完成日志收集，这就可以减少人为干预，提高工作效率，确保日志可以被正常收集。
+   如果es数据量大，kubernetes可以实现集群中pod应用的水平扩展，完成应用的弹性扩容和收缩等操作。
+
+2）kubernetes在DevOps场景下的应用
+DevOps是一套完整的运维开发流程，可以实现快速的构建、测试和发布软件，整个流程包括敏捷开发->持续集成->持续交付->持续部署->DevOps，通过 Kubernetes，我们可以实现容器在多个计算节点上的统一调度，可以将容器对接到持久存储、虚拟网络，还可以实现弹性伸缩等，提高了产品的迭代速度。
+kubernetes在DevOps中可以实现如下功能：
+多集群管理：可以根据用户需求对开发，测试，生产环境部署多套kubernetes集群，每个环境使用独立的物理资源，相互之间避免影响。
+多环境一致性：Kubernetes是基于docker的容器编排工具，因为容器的镜像是不可变的，所以镜像把 OS、业务代码、运行环境、程序库、目录结构都包含在内，镜像保存在我们的私有镜像仓库，只要用户从我们提供的私有仓库拉取镜像，就能保证环境的一致性。
+持续集成，持续部署，持续交付：可以让产品快速迭代，自动部署，根据用户的要求达到持续交付的能力。
+
+3）kubernetes在微服务架构中的应用
+微服务可以很好地保证未拆分的应用与已经拆分出来的微服务之间的互通和统一治理，不将业务代码与任何框架，平台或者服务绑定，管理微服务时，我们需要对这些微服务和它们的调用关系进行注册、为其分配资源、创建一定数量的节点副本、并发布到集群中去，同时还要为其配置好网络和负载均衡，使这些微服务能够被外部访问。在这些微服务的运行过程中，需要始终保持其可用性，一旦有节点出现问题，需要立即创建新的节点将其替换掉。运行过程中需要对这些微服务进行监控和日志收集，在负载发生变化的时候，还要能够迅速调整资源分配。
+kubernetes在微服务中可以实现如下功能：
+服务发现：通过service可以实现服务发现，支持4层和7层负载均衡，支持安全可靠的https协议和证书认证签发，可实现负载均衡，自修复，自动关联
+提供统一的配置管理中心：对于配置中心，K8S提供了configMap，可以在容器启动的时候，将配置注入到环境变量或者 Volume 里面。
+弹性伸缩：通过控制器创建指定数量的pod副本，通过hpa可以实现pod应用的水平扩容和回收
+   集群监控：支持容器，集群和节点级别的监控，提供全面的监控指标，多途径的报警方式及可视化的监控报表
+   高质量的调度和故障恢复策略：支持节点级别的亲和性调度，支持异地数据备份和故障恢复。
+通过jenkins实现持续集成/持续部署：
+       保证集群服务高可用：Jenkins Master和Jenkins Slave以Pod形式运行在Kubernetes集群的Node上，当Jenkins Master出现故障时，Kubernetes会自动创建一个新的Jenkins Master容器，并且将Volume分配给新创建的容器，保证数据不丢失，从而达到集群服务高可用。
+      动态伸缩：合理使用资源，每次运行Job时，会自动创建一个Jenkins Slave，Job完成后，Slave自动注销并删除容器，资源自动释放，而且Kubernetes会根据每个资源的使用情况，动态分配Slave到空闲的节点上创建，降低出现因某节点资源利用率高，还排队等待该节点的情况。
+     扩展性好：当Kubernetes集群的资源严重不足而导致Job排队等待时，可以很容易的添加一个Kubernetes Node到集群中，从而实现扩展。
+
+5.Kubernetes特点:
+可移植: 支持公有云，私有云，混合云，多重云（multi-cloud）
+可扩展: 可根据业务流量情况快速扩展kubernetes集群的节点数量。
+自愈: 自动发布，自动重启，自动复制，自动扩展
+进程协同：利用复合应用保证应用和容器一对一的模型。
+
+6.kubernetes可实现的功能：
+存储系统挂载
+分发密钥
+应用健康检测：livenessprobe，readnessprobe
+应用实例复制
+水平自动扩展
+命名和发现
+负载均衡
+滚动更新
+资源监控
+日志访问
+自检和调试
+识别和认证
+这为PaaS提供了IaaS层的便利，提供了基础设施提供者间的可移植性。
+
+7.kubernetes1.18+新增功能
+Kubernetes1.18是2020年发行的第一个新的版本，Kubernetes 1.18包含了38个增强功能，其中15个增强功能已趋于稳定，beta增强了11个，alpha增强了12个。
+注：
+alpha：表示内测版本
+beta：表示公测版本，还没有稳定
+stable：表示稳定版本
+
+一、主要功能
+1.KubernetesTopology Manager（kubernetes拓扑管理器）-beta版本
+拓扑管理器是kubernetes1.18版中的beta功能，在引入拓扑管理器之前，CPU和设备管理器将做出彼此独立的资源分配决策，这可能会导致在多套接字系统上资源分配分配不均的问题，从而导致关键型应用程序的性能下降，拓扑管理器可以使CPU和设备实现NUMA对齐，这将使工作负载在针对低延迟而优化的环境中运行。
+
+2.ServersideApply（服务端apply）-beta2版本
+服务器端Apply在1.16中升级为Beta，现在在1.18中增强到第二版Beta，这个新版本将跟踪和管理所有新Kubernetes对象的字段更改，从而知道什么更改了资源以及何时更改。
+
+3.ExtendingIngress with and replacing a deprecated annotation with IngressClass（使用IngressClass扩展Ingress并用IngressClass替换不推荐使用的注释）-stable版
+在Kubernetes 1.18中，Ingress有两个重要的改进：pathType字段和IngressClass资源。pathType字段允许指定路径应如何匹配。除了默认ImplementationSpecific类型外，还有new Exact和Prefixpath类型。IngressClass资源用于描述Kubernetes集群中的Ingress类型。入口可以通过ingressClassName在入口上使用新字段来指定与它们关联的类。此新资源和字段替换了不建议使用的kubernetes.io/ingress.class注释。
+
+4.SIG-CLIintroduces kubectl alpha debug（SIG-CLI引入kubectlalpha调试）-alpha版
+随着临时容器的发展，我们可以通过在kubectl exec，该kubectl alpha debug命令的添加使开发人员可以轻松地在集群中调试其Pod，此命令允许创建一个临时容器，该容器在要检查的Pod旁边运行，并且还附加到控制台以进行交互式故障排除。
+
+5.IntroducingWindows CSI support alpha for Kubernetes（为Kubernetes引入Windows CSI支持）-alpha版
+随着Kubernetes1.18的发布，用于Windows的CSI代理的Alpha版本也已发布。CSI代理使非特权（预先批准）的容器能够在Windows上执行特权存储操作。现在，可以利用CSI代理在Windows中支持CSI驱动程序。
+
+二、更新功能-已经由beta版成为稳定版的功能如下
+1.污秽驱逐
+https://github.com/kubernetes/enhancements/issues/166
+2.kubectl diff
+https://github.com/kubernetes/enhancements/issues/491
+3.CSI块存储支持
+https://github.com/kubernetes/enhancements/issues/565
+4.API Server运行
+https://github.com/kubernetes/enhancements/issues/576
+5.在CSI呼叫中传递Pod信息
+https://github.com/kubernetes/enhancements/issues/603
+6.支持树外vSphere Cloud Provider
+https://github.com/kubernetes/enhancements/issues/670
+7.为Windows工作负载支持GMSA
+https://github.com/kubernetes/enhancements/issues/689
+8.跳过附加的非附加CSI卷
+https://github.com/kubernetes/enhancements/issues/770
+9.PVC克隆
+https://github.com/kubernetes/enhancements/issues/989
+10.将kubectl软件包代码移至暂存
+https://github.com/kubernetes/enhancements/issues/1020
+11.Windows的RunAsUserName
+https://github.com/kubernetes/enhancements/issues/1043
+12.适用于服务和端点的AppProtocol
+https://github.com/kubernetes/enhancements/issues/1507
+13.扩展大页面功能
+https://github.com/kubernetes/enhancements/issues/1539
+14.客户端签名重构，以标准化选项和上下文处理
+https://github.com/kubernetes/enhancements/issues/1601
+15.节点本地DNS缓存
+https://github.com/kubernetes/enhancements/issues/1024
+
+三、主要变化
+1.EndpointSliceAPI
+https://github.com/kubernetes/enhancements/issues/752
+2.将kubectl软件包代码移至暂存
+https://github.com/kubernetes/enhancements/issues/1020
+3.CertificateSigningRequestAPI
+https://github.com/kubernetes/enhancements/issues/1513
+4.扩展大页面功能
+https://github.com/kubernetes/enhancements/issues/1539
+5.客户端签名重构，以标准化选项和上下文处理
+https://github.com/kubernetes/enhancements/issues/1601
+
+
+
+
+
+
+
+
+
